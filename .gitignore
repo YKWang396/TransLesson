@@ -1,0 +1,22 @@
+# Local media, credentials and generated course data must stay out of Git.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+__pycache__/
+.venv/
+node_modules/
+models/
+projects/
+cache/
+tmp/
+*.mp4
+*.mkv
+*.mov
+*.wav
+*.mp3
+*.flac
+*.log
+.DS_Store
+Thumbs.db
