@@ -12,8 +12,9 @@
 4. [实施计划、agent 分工与 Git 约定](docs/04-delivery-plan.md)
 5. [验收标准与测试素材计划](docs/05-acceptance.md)
 6. [技术来源与选型记录](docs/06-sources.md)
+7. [AI API、公式准确性与成本](docs/07-api-strategy.md)
 
-[数据契约 Schema](contracts/project.schema.json) 和 [示例课程数据](examples/project.json) 可用于前后端并行开发。示例是人工构造的演示数据，不是模型处理结果。
+[数据契约 Schema](contracts/project.schema.json)、[示例课程数据](examples/project.json) 与 [字幕及导出快照](examples/render-plan.json) 可用于前后端并行开发。示例是人工构造的演示数据，不是模型处理结果。
 
 ## 设计原则
 
@@ -21,6 +22,7 @@
 - 原文、译文、公式、读法和来源分别保存，便于校对与追踪。
 - 自动处理默认继续进行，存在低置信数学内容时在导出前进入校对。
 - 配音引擎、识别引擎与翻译引擎可替换，模型按需下载。
+- 支持本地桌面搭配 DeepSeek Flash API：语义任务可联网，媒体与工程管理仍在本地。
 - 默认不上传视频或音频；联网模型下载和外部 API 处理分别明确提示。
 - 每次修改只重跑受影响的步骤，避免整段课程反复计算。
 
@@ -30,6 +32,6 @@
 
 ## 设计数据校验
 
-在 PowerShell 7.4+ 中运行 `pwsh -File tools/validate-design.ps1`。它校验 JSON Schema、样例跨字段约束、7 个无效数据探针及文档本地链接。它不验证视频处理或模型质量。
+在 PowerShell 7.4+ 中运行 `pwsh -File tools/validate-design.ps1`。它校验两份 JSON Schema、样例跨字段约束、13 个无效数据探针、重复公式引用、字幕cue/产物依赖与文档本地链接。它不验证视频处理或模型质量。
 
 设计日期：2026-10-18。模型能力与许可须在锁定发布版本时复核。

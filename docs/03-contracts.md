@@ -2,6 +2,12 @@
 
 这些是供开发实现的接口约定，并非已经实现的 API。`project.schema.json` 只覆盖可编辑课程核心；任务、缓存和导出记录是独立文件，避免把所有状态塞进一个 JSON。
 
+`contracts/render-plan.schema.json` 补充字幕cue与导出快照的最小契约，样例见 `examples/render-plan.json`。此样例含假hash和不存在的媒体路径，并明确 `illustrative=true`，运行程序必须拒绝将它作为可执行导出计划。生产的 `artifacts.json` 可分离存储，但导出时必须组装成同等快照检查。
+
+每个产物记录 `input_revision`、实际文件hash、`input_fingerprint`、依赖产物ID及hash。`input_fingerprint`由本地程序计算，覆盖当前引用片段内容、读法、voice配置、模型/prompt版本和相关参数，不能让模型生成。旧revision产物只有在对当前快照重新计算的fingerprint一致时可复用；不能简单要求所有可复用片段都来自同一revision，也不能只靠revision旧就允许复用。
+
+导出前还须验证cue在所引用Segment时间内、公式属于该段，依赖ID存在/hash匹配、图无环、所有计划引用有效，且实际文件存在与hash相符。设计数据校验脚本只验证示例引用结构，不假装验证不存在的媒体文件或重新计算示例假hash。
+
 ## 1. 项目目录
 
 ```text
@@ -26,7 +32,7 @@
 
 | 实体 | 必需字段与规则 |
 |---|---|
-| Project | `project_id`、`schema_version`、`revision`、语言对、源指纹、各实体列表；用户确认修改后 revision 自增 |
+| Project | `project_id`、`schema_version`、`revision`、语言对、源指纹、各实体列表；每次持久化内容编辑即递增 revision，校对确认状态另外保存 |
 | Segment | 不变 ID、`start_ms/end_ms`、speaker、原文、译文、纯文本字幕、TTS读法、公式/术语ID、校对状态 |
 | Formula | 原始表达、`latex`（可暂为 null）、源/目标读法、一个以上来源证据、校对状态及警告 |
 | Term | 原术语、目标术语、适用上下文、锁定状态、来源；不同语义可有不同ID |
@@ -37,6 +43,10 @@
 `{{formula-1}}` 是受限公式占位符，只允许引用已有公式ID。模型不得把占位符改写成新编号。界面用数学渲染器显示，SRT导出用纯文本读法/Unicode，TTS用 `spoken_target`；后两者不是直接读 LaTeX。
 
 `Segment` 是语义/配音单位，不等于字幕 cue。独立生成 `subtitles.json` 产物，其中每个 cue 有 `id / segment_id / start_ms / end_ms / text / formula_ids`；一个 Segment 可拆成多个 cue。人工断行与拆cue只失效字幕和相应视频渲染，不影响未改文案的 TTS。
+
+同一公式可以在同一句/讲义中重复出现，`formula_ids` 存去重集合，校验比较占位符去重集合而不是出现次数。确认的语音段必须有非空译文、字幕纯文本和目标读法，导出所需字段为空时阻止相应产物生成，不把漏句当静音。
+
+界面尚未持久化的输入框修改也应设置dirty状态，拒绝自动覆盖；失去焦点/防抖保存后立刻递增revision，无需等用户“确认校对”。确认校对本身也是内容变更。任务元数据/进度变化不递增课程内容revision。
 
 `confirmed` 表示用户/校对流程接受的状态，不等于模型高置信输出。自动结果默认 `needs_review`，允许按项目规则自动接受低风险普通句，但不得据此自动确认高风险数学表达。`preserve_source` 表示用户已选择保留原截图/原表达，仍在讲义中标明未识别。
 

@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "illustrative": true,
+  "project_id": "demo-quadratic",
+  "project_revision": 1,
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "cues": [
+    {"id": "cue-1a", "segment_id": "seg-1", "start_ms": 1000, "end_ms": 3000, "text": "考虑这个多项式：", "formula_ids": []},
+    {"id": "cue-1b", "segment_id": "seg-1", "start_ms": 3000, "end_ms": 6000, "text": "x² + 2x + 1。", "formula_ids": ["formula-1"]},
+    {"id": "cue-2", "segment_id": "seg-2", "start_ms": 6500, "end_ms": 10500, "text": "接下来，我们求它的导数。", "formula_ids": []}
+  ],
+  "artifacts": [
+    {
+      "id": "tts-1", "kind": "tts", "path": "audio/seg-1.wav", "input_revision": 1, "segment_ids": ["seg-1"],
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "depends_on": []
+    },
+    {
+      "id": "tts-2", "kind": "tts", "path": "audio/seg-2.wav", "input_revision": 1, "segment_ids": ["seg-2"],
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "input_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "depends_on": []
+    },
+    {
+      "id": "mix-1", "kind": "mix", "path": "audio/mix.wav", "input_revision": 1, "segment_ids": ["seg-1", "seg-2"],
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "input_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "depends_on": [
+        {"artifact_id": "tts-1", "sha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+        {"artifact_id": "tts-2", "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}
+      ]
+    },
+    {
+      "id": "subs-1", "kind": "subtitles", "path": "exports/1/lesson.srt", "input_revision": 1, "segment_ids": ["seg-1", "seg-2"],
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "input_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "depends_on": []
+    },
+    {
+      "id": "video-1", "kind": "video", "path": "exports/1/lesson.mp4", "input_revision": 1, "segment_ids": ["seg-1", "seg-2"],
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "input_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "depends_on": [
+        {"artifact_id": "mix-1", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"},
+        {"artifact_id": "subs-1", "sha256": "4444444444444444444444444444444444444444444444444444444444444444"}
+      ]
+    }
+  ],
+  "export_artifact_ids": ["video-1", "subs-1"]
+}
