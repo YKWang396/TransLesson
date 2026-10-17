@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "project_id": "demo-quadratic",
+  "revision": 1,
+  "title": "二次多项式：人工构造的接口样例",
+  "languages": {"source": "en", "target": "zh-CN"},
+  "source": {
+    "path": "media/example.mp4",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "duration_ms": 12000,
+    "timeline_origin_ms": 0
+  },
+  "speakers": [{"id": "teacher", "label": "主讲人", "voice_mode": "standard"}],
+  "glossary": [{
+    "id": "term-derivative",
+    "source": "derivative",
+    "target": "导数",
+    "context": "一元函数的微积分",
+    "locked": true,
+    "evidence": [{"id": "ev-term-1", "kind": "speech", "start_ms": 6500, "end_ms": 10500}]
+  }],
+  "formulas": [{
+    "id": "formula-1",
+    "raw": "x squared plus two x plus one",
+    "latex": "x^2 + 2x + 1",
+    "spoken_source": "x squared plus two x plus one",
+    "spoken_target": "x 的平方加二 x 加一",
+    "review": "confirmed",
+    "warnings": [],
+    "evidence": [
+      {"id": "ev-speech-1", "kind": "speech", "start_ms": 1000, "end_ms": 6000},
+      {"id": "ev-frame-1", "kind": "frame", "start_ms": 2000, "end_ms": 2000, "frame_path": "frames/frame-2000.png", "bbox_xyxy": [0.15, 0.2, 0.7, 0.4]}
+    ]
+  }],
+  "segments": [
+    {
+      "id": "seg-1", "speaker_id": "teacher", "start_ms": 1000, "end_ms": 6000,
+      "source_text": "Consider x squared plus two x plus one.",
+      "target_text": "考虑这个多项式：{{formula-1}}。",
+      "subtitle_plain": "考虑多项式 x² + 2x + 1。",
+      "tts_text": "考虑这个多项式，x 的平方加二 x 加一。",
+      "formula_ids": ["formula-1"], "term_ids": [], "review": "confirmed"
+    },
+    {
+      "id": "seg-2", "speaker_id": "teacher", "start_ms": 6500, "end_ms": 10500,
+      "source_text": "Next, we will find its derivative.",
+      "target_text": "接下来，我们求它的导数。",
+      "subtitle_plain": "接下来，我们求它的导数。",
+      "tts_text": "接下来，我们求它的导数。",
+      "formula_ids": [], "term_ids": ["term-derivative"], "review": "confirmed"
+    }
+  ],
+  "notes": [{
+    "id": "note-1", "kind": "course", "heading": "本节讨论对象",
+    "body": "课程先给出多项式 {{formula-1}}，随后说明将求它的导数。示例片段尚未给出求导结果。",
+    "segment_ids": ["seg-1", "seg-2"], "formula_ids": ["formula-1"], "review": "confirmed"
+  }]
+}
