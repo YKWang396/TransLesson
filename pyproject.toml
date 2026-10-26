@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mathbridge"
+version = "0.1.0"
+description = "Local mathematics lecture translation and review desktop"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "PySide6-Essentials>=6.8,<6.13",
+  "PySide6-Addons>=6.8,<6.13",
+  "jsonschema>=4.23,<5",
+  "imageio-ffmpeg>=0.6,<0.7",
+  "reportlab>=4.2,<5",
+  "Pillow>=11,<13",
+]
+
+[project.optional-dependencies]
+asr = ["faster-whisper>=1.1,<2"]
+diarization = ["sherpa-onnx>=1.12,<2", "numpy>=1.26,<3"]
+dev = ["pytest>=8,<10", "pypdf>=5,<7", "pyinstaller>=6,<7"]
+
+[project.scripts]
+mathbridge = "mathbridge.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mathbridge = ["schemas/*.json", "handout/*.cjs", "handout/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

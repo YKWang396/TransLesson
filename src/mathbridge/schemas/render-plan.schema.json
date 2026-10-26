@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mathbridge:render-plan:1.0",
+  "title": "Render snapshot, subtitle cues and artifact dependency manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "illustrative", "project_id", "project_revision", "source_sha256", "cues", "artifacts", "export_artifact_ids"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "illustrative": {"type": "boolean"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "project_revision": {"type": "integer", "minimum": 1},
+    "source_sha256": {"$ref": "#/$defs/hash"},
+    "cues": {"type": "array", "items": {"$ref": "#/$defs/cue"}},
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+    "export_artifact_ids": {"$ref": "#/$defs/ids"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "path": {"type": "string", "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+    "cue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "segment_id", "start_ms", "end_ms", "text", "formula_ids"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "segment_id": {"$ref": "#/$defs/id"},
+        "start_ms": {"type": "integer", "minimum": 0},
+        "end_ms": {"type": "integer", "minimum": 1},
+        "text": {"type": "string", "pattern": "\\S"},
+        "formula_ids": {"$ref": "#/$defs/ids"}
+      }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "path", "sha256", "input_fingerprint", "input_revision", "segment_ids", "depends_on"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["tts", "mix", "subtitles", "pdf", "video"]},
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/hash"},
+        "input_fingerprint": {"$ref": "#/$defs/hash"},
+        "input_revision": {"type": "integer", "minimum": 1},
+        "segment_ids": {"$ref": "#/$defs/ids"},
+        "depends_on": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["artifact_id", "sha256"],
+          "properties": {"artifact_id": {"$ref": "#/$defs/id"}, "sha256": {"$ref": "#/$defs/hash"}}
+        }}
+      },
+      "allOf": [{"if": {"properties": {"kind": {"const": "tts"}}}, "then": {"properties": {"segment_ids": {"minItems": 1}}}}]
+    }
+  }
+}

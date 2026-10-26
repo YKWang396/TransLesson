@@ -1,0 +1,7 @@
+{
+  "name": "mathbridge-local-math",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Offline bounded MathJax rendering helper",
+  "dependencies": {"mathjax-full": "3.2.2"}
+}

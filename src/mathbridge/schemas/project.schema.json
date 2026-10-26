@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mathbridge:project:1.0",
+  "title": "MathBridge editable lesson core",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "revision", "title", "languages", "source", "speakers", "glossary", "formulas", "segments", "notes"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "revision": {"type": "integer", "minimum": 1},
+    "title": {"type": "string", "minLength": 1},
+    "languages": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "target"],
+      "properties": {
+        "source": {"type": "string", "minLength": 2},
+        "target": {"type": "string", "minLength": 2}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "duration_ms", "timeline_origin_ms"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relative_path"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "duration_ms": {"type": "integer", "minimum": 1},
+        "timeline_origin_ms": {"type": "integer"}
+      }
+    },
+    "speakers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/speaker"}},
+    "glossary": {"type": "array", "items": {"$ref": "#/$defs/term"}},
+    "formulas": {"type": "array", "items": {"$ref": "#/$defs/formula"}},
+    "segments": {"type": "array", "items": {"$ref": "#/$defs/segment"}},
+    "notes": {"type": "array", "items": {"$ref": "#/$defs/note"}}
+  },
+  "$defs": {
+    "relative_path": {"type": "string", "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "review": {"enum": ["needs_review", "confirmed", "preserve_source"]},
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "start_ms", "end_ms"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["speech", "frame"]},
+        "start_ms": {"type": "integer", "minimum": 0},
+        "end_ms": {"type": "integer", "minimum": 0},
+        "frame_path": {"$ref": "#/$defs/relative_path"},
+        "bbox_xyxy": {
+          "type": "array", "minItems": 4, "maxItems": 4,
+          "items": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      },
+      "allOf": [{
+        "if": {"properties": {"kind": {"const": "frame"}}},
+        "then": {"required": ["frame_path", "bbox_xyxy"]}
+      }]
+    },
+    "speaker": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "voice_mode"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "label": {"type": "string", "minLength": 1},
+        "voice_mode": {"enum": ["standard", "reference"]},
+        "voice_profile": {"$ref": "#/$defs/voice_profile"},
+        "reference_evidence": {"allOf": [{"$ref": "#/$defs/evidence"}, {"properties": {"kind": {"const": "speech"}}}]},
+        "voice_authorized": {"type": "boolean"}
+      },
+      "allOf": [{
+        "if": {"properties": {"voice_mode": {"const": "reference"}}},
+        "then": {"required": ["reference_evidence", "voice_authorized"], "properties": {"voice_authorized": {"const": true}}}
+      }]
+    },
+    "voice_profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {"enum": ["windows", "gpt_sovits"]},
+        "voice_name": {"type": "string"},
+        "speech_rate": {"type": "integer", "minimum": -10, "maximum": 10},
+        "speed": {"type": "number", "minimum": 0.5, "maximum": 2},
+        "reference_start_ms": {"type": "integer", "minimum": 0},
+        "reference_end_ms": {"type": "integer", "minimum": 0},
+        "reference_text": {"type": "string"},
+        "reference_language": {"enum": ["en", "zh", "zh-CN"]}
+      }
+    },
+    "term": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "source", "target", "context", "locked", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "source": {"type": "string", "minLength": 1},
+        "target": {"type": "string", "minLength": 1},
+        "context": {"type": "string"},
+        "locked": {"type": "boolean"},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "formula": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "raw", "latex", "spoken_source", "spoken_target", "review", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "raw": {"type": "string", "minLength": 1},
+        "latex": {"type": ["string", "null"], "minLength": 1},
+        "spoken_source": {"type": "string"},
+        "spoken_target": {"type": "string"},
+        "review": {"$ref": "#/$defs/review"},
+        "warnings": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "allOf": [{"if": {"properties": {"review": {"const": "confirmed"}}}, "then": {"properties": {"latex": {"type": "string", "pattern": "\\S"}}}}]
+    },
+    "segment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "speaker_id", "start_ms", "end_ms", "source_text", "target_text", "subtitle_plain", "tts_text", "formula_ids", "term_ids", "review"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "speaker_id": {"$ref": "#/$defs/id"},
+        "start_ms": {"type": "integer", "minimum": 0},
+        "end_ms": {"type": "integer", "minimum": 1},
+        "source_text": {"type": "string", "minLength": 1},
+        "target_text": {"type": "string"},
+        "subtitle_plain": {"type": "string"},
+        "tts_text": {"type": "string"},
+        "formula_ids": {"$ref": "#/$defs/ids"},
+        "term_ids": {"$ref": "#/$defs/ids"},
+        "review": {"$ref": "#/$defs/review"}
+      },
+      "allOf": [{"if": {"properties": {"review": {"const": "confirmed"}}}, "then": {"properties": {
+        "target_text": {"pattern": "\\S"}, "subtitle_plain": {"pattern": "\\S"}, "tts_text": {"pattern": "\\S"}
+      }}}]
+    },
+    "note": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "heading", "body", "segment_ids", "formula_ids", "review"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["course", "supplement"]},
+        "heading": {"type": "string", "minLength": 1},
+        "body": {"type": "string", "minLength": 1},
+        "segment_ids": {"$ref": "#/$defs/ids"},
+        "formula_ids": {"$ref": "#/$defs/ids"},
+        "review": {"$ref": "#/$defs/review"}
+      },
+      "allOf": [{
+        "if": {"properties": {"kind": {"const": "course"}}},
+        "then": {"anyOf": [{"properties": {"segment_ids": {"minItems": 1}}}, {"properties": {"formula_ids": {"minItems": 1}}}]}
+      }]
+    }
+  }
+}

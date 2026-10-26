@@ -160,7 +160,9 @@ Write-Output 'PASS: render snapshot schema, cues, dependency hashes, acyclic gra
 
 # Only validate relative Markdown file links. External URLs and future code paths are not fetched.
 $linkCount = 0
-foreach ($doc in Get-ChildItem -LiteralPath $repoPath -Recurse -Filter '*.md' -File) {
+$projectDocs = @((Get-Item -LiteralPath (Join-Path $repoPath 'README.md')))
+$projectDocs += @(Get-ChildItem -LiteralPath (Join-Path $repoPath 'docs') -Recurse -Filter '*.md' -File)
+foreach ($doc in $projectDocs) {
     $body = Get-Content -Raw -LiteralPath $doc.FullName
     foreach ($match in [regex]::Matches($body, '\[[^\]]+\]\(([^)]+)\)')) {
         $target = $match.Groups[1].Value

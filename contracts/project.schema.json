@@ -65,6 +65,7 @@
         "id": {"$ref": "#/$defs/id"},
         "label": {"type": "string", "minLength": 1},
         "voice_mode": {"enum": ["standard", "reference"]},
+        "voice_profile": {"$ref": "#/$defs/voice_profile"},
         "reference_evidence": {"allOf": [{"$ref": "#/$defs/evidence"}, {"properties": {"kind": {"const": "speech"}}}]},
         "voice_authorized": {"type": "boolean"}
       },
@@ -72,6 +73,20 @@
         "if": {"properties": {"voice_mode": {"const": "reference"}}},
         "then": {"required": ["reference_evidence", "voice_authorized"], "properties": {"voice_authorized": {"const": true}}}
       }]
+    },
+    "voice_profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {"enum": ["windows", "gpt_sovits"]},
+        "voice_name": {"type": "string"},
+        "speech_rate": {"type": "integer", "minimum": -10, "maximum": 10},
+        "speed": {"type": "number", "minimum": 0.5, "maximum": 2},
+        "reference_start_ms": {"type": "integer", "minimum": 0},
+        "reference_end_ms": {"type": "integer", "minimum": 0},
+        "reference_text": {"type": "string"},
+        "reference_language": {"enum": ["en", "zh", "zh-CN"]}
+      }
     },
     "term": {
       "type": "object", "additionalProperties": false,
