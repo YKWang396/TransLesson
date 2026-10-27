@@ -23,7 +23,8 @@ def main(argv=None):
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setOrganizationName("MathBridge")
     app.setApplicationName("MathBridge")
-    app.setApplicationVersion("0.1.0")
+    from mathbridge import __version__
+    app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
     # Qt's offscreen platform does not enumerate Windows system fonts. Loading
     # the installed font explicitly also keeps automated visual QA legible.

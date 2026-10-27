@@ -5,7 +5,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QStandardPaths
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout,
     QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSpinBox,
@@ -21,10 +21,18 @@ def _available_model(name):
     return str(model) if model.is_file() else ""
 
 
+def _available_whisper_model():
+    desktop = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation) or Path.home() / "Desktop")
+    for directory in (_MODEL_ROOT.parent / "faster-whisper-small", desktop / "faster-whisper-small", desktop / "faster-whisper-mini"):
+        if all((directory / name).is_file() for name in ("model.bin", "config.json", "tokenizer.json")):
+            return str(directory)
+    return ""
+
+
 DEFAULTS = {
     "text_provider": "manual", "api_base": "https://api.deepseek.com",
     "model": "deepseek-flash", "allow_text_api": False, "allow_image_api": False,
-    "whisper_model_path": "", "whisper_device": "cpu", "whisper_compute_type": "int8",
+    "whisper_model_path": _available_whisper_model(), "whisper_device": "cpu", "whisper_compute_type": "int8",
     "diarization_enabled": False, "diarization_segmentation_path": _available_model("segmentation.onnx"),
     "diarization_embedding_path": _available_model("embedding.onnx"), "diarization_num_speakers": 0,
     "voice_clone_api_url": "http://127.0.0.1:9880", "voice_clone_model": "default",
@@ -41,7 +49,7 @@ def load_settings() -> dict:
     result = {}
     for key, default in DEFAULTS.items():
         value = store.value(key, default)
-        if key in ("diarization_segmentation_path", "diarization_embedding_path") and not value:
+        if key in ("whisper_model_path", "diarization_segmentation_path", "diarization_embedding_path") and not value:
             value = default
         if isinstance(default, bool):
             value = value is True or str(value).lower() == "true"

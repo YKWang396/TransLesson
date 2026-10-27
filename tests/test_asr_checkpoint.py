@@ -4,12 +4,13 @@ import json
 import os
 import sys
 import threading
+import wave
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from mathbridge.media.engine import CancelledError
-from mathbridge.providers.asr.whisper import transcribe
+from mathbridge.media.engine import CancelledError, MediaError
+from mathbridge.providers.asr.whisper import _read_pcm16, transcribe
 
 
 def segment(start, end, text):
@@ -22,7 +23,9 @@ def segment(start, end, text):
 @pytest.fixture
 def local_provider(tmp_path, monkeypatch):
     audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"audio-one")
+    with wave.open(str(audio), "wb") as output:
+        output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        output.writeframes(b"\0\0" * 16000 * 6)
     model = tmp_path / "model"
     model.mkdir()
     for name in ("model.bin", "config.json", "tokenizer.json"):
@@ -38,6 +41,9 @@ def local_provider(tmp_path, monkeypatch):
             self.model = SimpleNamespace(is_multilingual=True)
 
         def transcribe(self, audio, *, clip_timestamps=None, **kwargs):
+            import numpy as np
+            assert isinstance(audio, np.ndarray) and audio.dtype == np.float32
+            assert audio.shape == (16000 * 6,)
             state.calls.append(clip_timestamps)
             records = [record for record in state.records
                        if clip_timestamps is None or record.start >= clip_timestamps[0]]
@@ -129,7 +135,11 @@ def test_input_fingerprint_invalidates_prefix_by_content(local_provider, changed
     if changed_input in ("audio", "model"):
         path = audio if changed_input == "audio" else model / "model.bin"
         info = path.stat()
-        replacement = b"audio-two" if changed_input == "audio" else b"weights2"
+        if changed_input == "audio":
+            replacement = bytearray(path.read_bytes())
+            replacement[-1] ^= 1
+        else:
+            replacement = b"weights2"
         assert len(replacement) == info.st_size
         path.write_bytes(replacement)
         os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
@@ -140,3 +150,24 @@ def test_input_fingerprint_invalidates_prefix_by_content(local_provider, changed
     assert len(result) == 2 and state.calls == [None, None]
     assert current["input_fingerprint"] != previous["input_fingerprint"]
     assert len(list(output.parent.glob("raw.rejected-*.json"))) == 1
+
+
+def test_normalized_pcm_preserves_silence_amplitude_and_time(tmp_path):
+    import numpy as np
+    from array import array
+    path = tmp_path / "normalized.wav"
+    values = array("h", [0] * 16000 + [16384, -16384] * 8000)
+    with wave.open(str(path), "wb") as output:
+        output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        output.writeframes(values.tobytes())
+    samples = _read_pcm16(path, lambda: None)
+    assert samples.dtype == np.float32 and len(samples) == 32000
+    assert not np.any(samples[:16000])
+    assert samples[16000] == .5 and samples[16001] == -.5
+
+
+def test_pcm_reader_rejects_truncated_content(local_provider):
+    audio, _, _, _ = local_provider
+    audio.write_bytes(audio.read_bytes()[:-100])
+    with pytest.raises(MediaError, match="不完整"):
+        _read_pcm16(audio, lambda: None)

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -41,6 +42,7 @@ class Coordinator(QObject):
         self._reaper = None
         self._editor_dirty = False
         self._usage = {}
+        self._progress_saved_at = 0.0
 
     @property
     def usage(self):
@@ -108,7 +110,7 @@ class Coordinator(QObject):
         store.write("runtime.json", runtime)
         self.project_changed.emit(copy.deepcopy(candidate))
 
-    def update_segment(self, segment_id, changes):
+    def update_segment(self, segment_id, changes, *, _derived_fresh=False):
         previous = copy.deepcopy(self.project)
         original = next(s for s in self.project["segments"] if s["id"] == segment_id)
         changes = dict(changes)
@@ -116,7 +118,7 @@ class Coordinator(QObject):
         target_changed = "target_text" in changes and changes["target_text"] != original["target_text"]
         if source_changed or target_changed:
             derived = ("target_text", "subtitle_plain", "tts_text") if source_changed else ("subtitle_plain", "tts_text")
-            for field in derived:
+            for field in (() if _derived_fresh else derived):
                 # Preserve deliberately supplied new derived text; reject reuse of old text.
                 if changes.get(field, original[field]) == original[field]:
                     changes[field] = ""
@@ -133,6 +135,27 @@ class Coordinator(QObject):
                 if segment_id in note["segment_ids"]:
                     note["review"] = "needs_review"
         self._save_edit(candidate, previous)
+
+    def update_simple_subtitle(self, segment_id, subtitle_text, *, changes=None):
+        if not self.project:
+            raise ValueError("请先打开项目")
+        original = next((segment for segment in self.project["segments"] if segment["id"] == segment_id), None)
+        if original is None:
+            raise ValueError("片段不存在")
+        edits = dict(changes or {})
+        for key in ("target_text", "subtitle_plain", "tts_text"):
+            edits.pop(key, None)
+        if edits.get("source_text", original["source_text"]) != original["source_text"]:
+            # Source correction invalidates the previous translation. The view
+            # reloads the cleared fields instead of retaining an old hidden TTS.
+            self.update_segment(segment_id, edits)
+            return
+        fresh = subtitle_text != original["subtitle_plain"] or bool(subtitle_text.strip()) and any(not original[key].strip() for key in ("target_text", "tts_text"))
+        if fresh:
+            from mathbridge.application.review import simple_subtitle_changes
+            edits.update(simple_subtitle_changes(self.project, original, subtitle_text))
+        if any(original.get(key) != value for key, value in edits.items()):
+            self.update_segment(segment_id, edits, _derived_fresh=fresh)
 
     def add_speaker(self, label):
         if not self.project:
@@ -285,6 +308,14 @@ class Coordinator(QObject):
         return export_issues(self.project, formats)
 
     def run_stage(self, stage, options=None):
+        if stage == "prepare_translation":
+            if self.busy:
+                raise ValueError("已有任务运行")
+            if not self.project or not self.project["segments"]:
+                raise ValueError("请先生成原文或导入字幕")
+            self._pipeline = ["translate"]
+            self._start("analyze", options or {})
+            return
         if stage == "pipeline":
             if self.busy:
                 raise ValueError("已有任务运行")
@@ -312,6 +343,7 @@ class Coordinator(QObject):
                              settings=settings, options=copy.deepcopy(options), artifacts=store.read("artifacts.json", []))
         self._buffer, self._stderr = b"", b""
         self._done, self._cancelled = False, False
+        self._progress_saved_at = 0.0
         process = QProcess(self)
         environment = QProcessEnvironment.systemEnvironment()
         environment.insert("PYTHONPATH", str(Path(__file__).resolve().parents[2]))
@@ -359,6 +391,18 @@ class Coordinator(QObject):
                 if message.get("request_id") != self._command["request_id"]:
                     continue
                 if message["type"] == "progress":
+                    now = time.monotonic()
+                    if not message.get("total") or now - self._progress_saved_at >= 2 or message.get("completed") == message.get("total"):
+                        try:
+                            store = ProjectStore(self._command["project_dir"])
+                            runtime = store.read("runtime.json", {"stages": {}})
+                            state = runtime.setdefault("stages", {}).setdefault(self._command["stage"], {})
+                            state["last_progress"] = {key: message.get(key) for key in ("stage", "completed", "total", "message")}
+                            state["updated_at"] = time.time()
+                            store.write("runtime.json", runtime)
+                            self._progress_saved_at = now
+                        except OSError:
+                            self.log_message.emit("进度记录暂时无法写入，当前任务仍在运行")
                     self.progress.emit(message.get("stage", ""), message.get("completed", 0), message.get("total", 0), message.get("message", ""))
                 elif message["type"] == "done" and not self._done:
                     self._done = True
@@ -376,8 +420,11 @@ class Coordinator(QObject):
             return
         store = ProjectStore(self._command["project_dir"])
         runtime = store.read("runtime.json", {"stages": {}})
-        runtime.setdefault("stages", {})[self._command["stage"]] = dict(status=status,
-            request_id=self._command["request_id"], input_revision=self._command["project_revision"], **(extra or {}))
+        stages = runtime.setdefault("stages", {})
+        previous = stages.get(self._command["stage"], {})
+        state = dict(previous) if previous.get("request_id") == self._command["request_id"] else {"started_at": time.time()}
+        state.update(status=status, request_id=self._command["request_id"], input_revision=self._command["project_revision"], updated_at=time.time(), **(extra or {}))
+        stages[self._command["stage"]] = state
         store.write("runtime.json", runtime)
 
     def _receive_result(self, message):

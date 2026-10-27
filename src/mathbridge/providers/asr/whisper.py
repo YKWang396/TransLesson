@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import uuid
+import wave
 
 from ...media.engine import CancelledError, MediaError
 
@@ -56,7 +57,33 @@ def _inputs(audio, model_path, language, check):
             "language": language, "provider": "faster-whisper",
             "provider_version": _installed_version("faster-whisper"),
             "ctranslate2_version": _installed_version("ctranslate2"),
-            "adapter_version": "mathbridge-asr-checkpoint-1", "parameters": _PARAMETERS}
+            "adapter_version": "mathbridge-asr-checkpoint-2-pcm", "parameters": _PARAMETERS}
+
+
+def _read_pcm16(audio, check):
+    """Read FFmpeg's normalized waveform without a second PyAV decoding pass."""
+    import numpy as np
+    try:
+        with wave.open(str(audio), "rb") as source:
+            if (source.getnchannels(), source.getsampwidth(), source.getframerate(), source.getcomptype()) != (1, 2, 16000, "NONE"):
+                raise MediaError("INVALID_AUDIO", "识别需要 16kHz 单声道 PCM 音轨，请重新提取音频。")
+            frames = source.getnframes()
+            if not frames:
+                raise MediaError("INVALID_AUDIO", "音轨为空，无法识别讲话。")
+            samples = np.empty(frames, dtype=np.float32)
+            position = 0
+            while position < frames:
+                check()
+                count = min(16000 * 10, frames-position)
+                data = source.readframes(count)
+                if len(data) != count * 2:
+                    raise MediaError("INVALID_AUDIO", "音轨内容不完整，请重新提取音频。")
+                samples[position:position+count] = np.frombuffer(data, dtype="<i2")
+                samples[position:position+count] /= 32768.0
+                position += count
+            return samples
+    except (wave.Error, EOFError, OSError) as exc:
+        raise MediaError("INVALID_AUDIO", "无法读取本地 PCM 音轨，请重新提取音频。") from exc
 
 
 def _atomic_checkpoint(path, payload):
@@ -163,6 +190,8 @@ def transcribe(audio, language, model_path, cancel=None, progress=None, *, raw_o
     if model_path is None or not model_path.is_dir() or any(not (model_path / name).is_file() for name in required):
         raise MediaError("MISSING_MODEL", "请导入完整本地 CTranslate2 多语种 Whisper 模型（model.bin/config.json/tokenizer.json），不会自动下载。")
     try:
+        if progress:
+            progress("transcribe", 0, 0, "正在加载本地 Whisper 识别组件")
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise MediaError("MISSING_DEPENDENCY", "未安装可选 faster-whisper 识别组件。") from exc
@@ -170,6 +199,8 @@ def transcribe(audio, language, model_path, cancel=None, progress=None, *, raw_o
     if language not in ("zh", "en"):
         raise MediaError("LANGUAGE_UNAVAILABLE", "首版已启用中文与英语识别。")
     checkpoint = Path(raw_output).resolve() if raw_output is not None else None
+    if progress:
+        progress("transcribe", 0, 0, "正在校验模型文件与音轨，请稍候")
     inputs = _inputs(audio, model_path, language, check) if checkpoint else None
     state = {"schema_version": 1, "provider": "faster-whisper", "language": language,
              "model_path": str(model_path), "inputs": inputs,
@@ -194,6 +225,8 @@ def transcribe(audio, language, model_path, cancel=None, progress=None, *, raw_o
         # Keep the partial file intact if an incompatible provider is selected.
         raise MediaError("MISSING_DEPENDENCY", "已保留逐词识别检查点；此版本不支持 clip_timestamps，请更新 faster-whisper 后续跑。")
     try:
+        if progress:
+            progress("transcribe", 0, 0, "正在把 Whisper 模型载入内存")
         model = WhisperModel(str(model_path), device="cpu", compute_type="int8", local_files_only=True)
         if language != "en" and not model.model.is_multilingual:
             raise MediaError("LANGUAGE_UNAVAILABLE", "所选模型只支持英语，请导入多语种模型。")
@@ -204,7 +237,10 @@ def transcribe(audio, language, model_path, cancel=None, progress=None, *, raw_o
             options["clip_timestamps"] = [resume_from]
             if progress:
                 progress("asr", round(resume_from * 1000), state["duration_ms"], f"复用已验证的 {len(result)} 段，从原音频时间继续")
-        segments, info = model.transcribe(str(audio), language=language, **options)
+        if progress:
+            progress("transcribe", 0, 0, "正在读取音轨并准备识别，首段文字稍后显示")
+        samples = _read_pcm16(audio, check)
+        segments, info = model.transcribe(samples, language=language, **options)
         total_ms = round(info.duration * 1000)
         if total_ms <= 0:
             raise MediaError("UNSUPPORTED_MEDIA", "识别音频没有有效时长。")

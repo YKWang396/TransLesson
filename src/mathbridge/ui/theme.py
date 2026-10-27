@@ -6,6 +6,8 @@ QWidget { color: #233047; font-family: 'Microsoft YaHei UI', 'Segoe UI'; font-si
 QLabel#brand { color: #172b4d; font-size: 19pt; font-weight: 700; }
 QLabel#eyebrow { color: #687a95; font-size: 9pt; }
 QLabel#pageTitle { font-size: 20pt; font-weight: 700; color: #172b4d; }
+QFrame#reviewGuide { background: #eaf0fc; border: 1px solid #d8e3f7; border-radius: 8px; }
+QLabel#guideTitle { color: #203e70; font-size: 13pt; font-weight: 700; }
 QLabel#description { color: #65738a; }
 QLabel#saveStatus { color: #34755b; padding: 5px 10px; border-radius: 10px; background: #e7f3ec; }
 QLabel#notice { color: #775e2a; background: #fff8e7; padding: 10px; border-radius: 6px; }

@@ -115,8 +115,9 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         for segment in project["segments"]:
             segment["end_ms"] = min(segment["end_ms"], project["source"]["duration_ms"])
         project["formulas"], project["glossary"], project["notes"] = [], [], []
-        frames = engine().sample_frames(source, job_dir / "frames", project["source"]["duration_ms"])
-        metadata["frames"] = frames
+        # Transcription must be available as soon as speech recognition ends.
+        # A full video scan (especially AV1) is a separate, optional operation.
+        metadata["frames"] = engine().sample_frames(source, job_dir / "frames", project["source"]["duration_ms"]) if options.get("sample_frames") else []
 
     elif stage == "diarize":
         if not project["segments"]:
@@ -344,8 +345,9 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                     source_sha256=project["source"]["sha256"], cues=cues, artifacts=artifacts, export_artifact_ids=export_ids)
         validate_render_plan(plan, project, root)
         atomic_json(directory / "render-plan.json", plan)
+        from mathbridge import __version__
         atomic_json(directory / "export-report.json", dict(project_revision=project["revision"], background=background, warnings=issues,
-                                                         created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), software="MathBridge 0.1.0", checks="hashes, dependency graph, cue ranges, media probe"))
+                                                         created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), software="MathBridge " + __version__, checks="hashes, dependency graph, cue ranges, media probe"))
         outputs.extend([str(directory / "render-plan.json"), str(directory / "export-report.json")])
         metadata.update(export_revision=project["revision"], export_directory=str(directory), warnings=issues)
     else:
@@ -375,12 +377,22 @@ def main():
                     cancel.set()
             except (ValueError, TypeError):
                 pass
-    threading.Thread(target=listen, daemon=True).start()
     def report(payload):
         payload["request_id"] = request_id
         protocol.write(json.dumps(payload, ensure_ascii=False) + "\n")
         protocol.flush()
     try:
+        # Windows native numerical runtimes can consult CRT file descriptors
+        # while loading. Load them before a background thread blocks on stdin.
+        if command.get("stage") in {"transcribe", "diarize"}:
+            report(dict(type="progress", stage=command["stage"], completed=0, total=0,
+                        message="正在加载本地语音识别组件"))
+            import numpy
+            if command["stage"] == "transcribe":
+                import faster_whisper
+            else:
+                import sherpa_onnx
+        threading.Thread(target=listen, daemon=True).start()
         payload = execute(command, cancel, report)
         if cancel.is_set():
             raise InterruptedError("任务已取消")

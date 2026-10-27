@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tomllib
 
 from packaging.requirements import Requirement
 
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    application_version = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
     wanted = ['PySide6-Essentials', 'PySide6-Addons', 'jsonschema', 'imageio-ffmpeg', 'reportlab', 'Pillow', 'faster-whisper', 'sherpa-onnx']
     resolved = {}
     while wanted:
@@ -68,7 +70,7 @@ def main():
             while chunk := f.read(1024 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()
-    report = {'platform': platform.platform(), 'python': sys.version, 'packages': records,
+    report = {'application_version': application_version, 'platform': platform.platform(), 'python': sys.version, 'packages': records,
               'node': {'version': node_version, 'sha256': sha(node) if node else None, 'license_status': 'Upstream Node.js and bundled third-party license collection required before public redistribution'},
               'mathjax': {'version': mathjax_data['version'], 'license': mathjax_data['license']},
               'ffmpeg': {'version_and_configuration': ffmpeg_version, 'sha256': sha(ffmpeg), 'license': 'GPL version 3 or later per actual -L output; compatible corresponding source distribution must be arranged before public redistribution'},

@@ -17,10 +17,11 @@ from PySide6.QtWidgets import (
 
 from .editors import FormulaDialog, FrameEvidenceDialog, REVIEW_LABELS, SpeakerDialog, TermDialog, review_combo
 from .settings import SettingsDialog, load_settings, save_settings
+from .review_workflow import review_guidance
 from .theme import STYLESHEET
 
 
-STAGES = {"create": "建立项目", "transcribe": "本地转写", "diarize": "区分说话人", "analyze": "数学解析", "translate": "课程翻译", "dub": "生成配音", "speaker_reference": "提取参考原声", "notes": "整理讲义", "export": "导出", "frame": "提取当前帧", "preview": "生成预览", "pipeline": "自动处理草稿", "import_subtitles": "导入字幕"}
+STAGES = {"create": "建立项目", "transcribe": "识别课程原文", "diarize": "区分说话人", "analyze": "检查数学表达", "translate": "生成译文", "prepare_translation": "生成译文", "dub": "生成配音", "speaker_reference": "提取参考原声", "notes": "整理讲义", "export": "导出", "frame": "提取当前帧", "preview": "生成预览", "pipeline": "自动处理草稿", "import_subtitles": "导入字幕"}
 
 
 def timecode(ms):
@@ -66,14 +67,17 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._committing = False
         self._segment_dirty = False
+        self._simple_formula_blocked = None
         self._note_dirty = False
         self._source_loaded = ""
+        self._playback_stop_ms = None
         self._latest_audio = None
         self._frame_path = None
         self._frame_time = 0
         self._frame_requested_ms = 0
         self._last_outputs = []
         self._closing_requested = False
+        self._view_busy = False
         self._stage_buttons = []
         self._segment_timer = QTimer(self)
         self._segment_timer.setSingleShot(True)
@@ -246,18 +250,58 @@ class MainWindow(QMainWindow):
     def _review_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        commands = QHBoxLayout()
-        commands.addWidget(self._stage_button("① 本地转写", "transcribe"))
-        commands.addWidget(self._stage_button("区分说话人", "diarize"))
-        commands.addWidget(self._stage_button("② 数学解析", "analyze"))
-        commands.addWidget(self._stage_button("③ 翻译与读法", "translate", True))
-        commands.addWidget(button("拆分原文片段", self._split_segment))
-        commands.addStretch()
+        layout.setSpacing(8)
+        guide = QFrame()
+        guide.setObjectName("reviewGuide")
+        guide_layout = QHBoxLayout(guide)
+        guide_layout.setContentsMargins(14, 10, 14, 10)
+        guide_text = QVBoxLayout()
+        guide_text.setSpacing(3)
+        self.review_steps = label("1 获得原文    →    2 生成译文    →    3 逐句校对    →    4 去配音", "description")
+        guide_text.addWidget(self.review_steps)
+        self.review_guide_title = label("先导入一个课程视频", "guideTitle")
+        guide_text.addWidget(self.review_guide_title)
+        self.review_guide_description = label("", "description")
+        guide_text.addWidget(self.review_guide_description)
+        guide_layout.addLayout(guide_text, 1)
+        guide_actions = QVBoxLayout()
+        guide_actions.setSpacing(3)
+        self.review_next_button = button("下一步", self._review_next, True)
+        self.review_next_button.setMinimumWidth(180)
+        guide_actions.addWidget(self.review_next_button)
+        self.review_progress = label("", "description")
+        self.review_progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        guide_actions.addWidget(self.review_progress)
+        guide_layout.addLayout(guide_actions)
+        layout.addWidget(guide)
+
+        options = QHBoxLayout()
+        self.review_import_subtitles_button = button("我有现成字幕", self._import_subtitles)
+        options.addWidget(self.review_import_subtitles_button)
+        self.review_manual_button = button("手动填写字幕", self._manual_review)
+        options.addWidget(self.review_manual_button)
+        options.addStretch()
         self.filter = QCheckBox("只看待校对")
         self.filter.toggled.connect(self._refresh_segment_table)
-        commands.addWidget(self.filter)
-        layout.addLayout(commands)
-        split = QSplitter(Qt.Orientation.Horizontal)
+        options.addWidget(self.filter)
+        self.advanced_toggle = QCheckBox("高级校对工具")
+        self.advanced_toggle.setToolTip("需要单独修改公式、配音读法、时间或说话人时展开。")
+        self.advanced_toggle.toggled.connect(self._toggle_review_advanced)
+        options.addWidget(self.advanced_toggle)
+        layout.addLayout(options)
+
+        self.advanced_panel = QWidget()
+        commands = QHBoxLayout(self.advanced_panel)
+        commands.setContentsMargins(0, 0, 0, 0)
+        commands.addWidget(self._stage_button("识别原文", "transcribe"))
+        commands.addWidget(self._stage_button("区分说话人", "diarize"))
+        commands.addWidget(self._stage_button("检查数学表达", "analyze"))
+        commands.addWidget(self._stage_button("重新生成译文", "prepare_translation"))
+        commands.addWidget(button("拆分原文片段", self._split_segment))
+        commands.addStretch()
+        self.advanced_panel.hide()
+        layout.addWidget(self.advanced_panel)
+        split = self.review_split = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(split, 1)
         self.preview_panel = self._media_panel()
         split.addWidget(self.preview_panel)
@@ -265,7 +309,7 @@ class MainWindow(QMainWindow):
         middle = QVBoxLayout(center)
         middle.setContentsMargins(0, 0, 0, 0)
         self.segment_table = QTableWidget(0, 5)
-        self.segment_table.setMinimumHeight(180)
+        self.segment_table.setMinimumHeight(135)
         self.segment_table.setHorizontalHeaderLabels(["时间 / 秒", "说话人", "课程原文", "译文 / 字幕", "状态"])
         self.segment_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.segment_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -279,21 +323,40 @@ class MainWindow(QMainWindow):
         self.segment_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.segment_table.itemSelectionChanged.connect(self._segment_selected)
         middle.addWidget(self.segment_table, 3)
-        self.editor_box = QGroupBox("片段编辑")
+        self.editor_box = QGroupBox("听原文，检查目标字幕，确认后继续下一句")
+        self.editor_box.setStyleSheet("QGroupBox { margin-top: 14px; padding: 6px 8px 6px; }")
         form = QGridLayout(self.editor_box)
         form.setVerticalSpacing(5)
         self.segment_caption = label("选择片段后开始编辑", "description")
         self.segment_caption.setWordWrap(False)
         self.segment_fields = {}
-        for index, (key, title) in enumerate([("source_text", "源句"), ("target_text", "译文 · 支持公式 ID"), ("subtitle_plain", "字幕 · 纯文本"), ("tts_text", "配音 · 实际读法")]):
-            row, col = divmod(index, 2)
-            form.addWidget(label(title), 1 + row * 2, col)
+        form.addWidget(self.segment_caption, 0, 0, 1, 2)
+        for col, (key, title) in enumerate([("source_text", "原文"), ("subtitle_plain", "目标字幕")]):
+            caption = label(title)
+            if key == "subtitle_plain":
+                self.subtitle_caption = caption
+            form.addWidget(caption, 1, col)
+            field = QPlainTextEdit()
+            field.setFixedHeight(72)
+            field.textChanged.connect(self._mark_segment_dirty)
+            self.segment_fields[key] = field
+            form.addWidget(field, 2, col)
+        self.segment_fields["source_text"].setPlaceholderText("先识别课程原文，或导入已有字幕。")
+        self.segment_fields["subtitle_plain"].setPlaceholderText("检查或填写这里：视频中最终显示的字幕。")
+        self.review_edit_notice = label("普通句子的译文和配音读法会随字幕更新；含公式时保留专用读法。", "description")
+        form.addWidget(self.review_edit_notice, 3, 0, 1, 2)
+
+        self.advanced_fields = QWidget()
+        details = QGridLayout(self.advanced_fields)
+        details.setContentsMargins(0, 0, 0, 0)
+        for col, (key, title) in enumerate([("target_text", "讲义译文 · 保留公式标记"), ("tts_text", "配音读法 · 需要特殊读法时修改")]):
+            details.addWidget(label(title), 0, col)
             field = QPlainTextEdit()
             field.setMinimumHeight(55)
             field.setMaximumHeight(100)
             field.textChanged.connect(self._mark_segment_dirty)
             self.segment_fields[key] = field
-            form.addWidget(field, 2 + row * 2, col)
+            details.addWidget(field, 1, col)
         timing = QHBoxLayout()
         self.start_time = QDoubleSpinBox()
         self.end_time = QDoubleSpinBox()
@@ -310,10 +373,9 @@ class MainWindow(QMainWindow):
         self.segment_review = review_combo()
         self.segment_review.currentIndexChanged.connect(self._mark_segment_dirty)
         timing.addWidget(self.segment_review)
-        form.addLayout(timing, 5, 0, 1, 2)
+        details.addLayout(timing, 2, 0, 1, 2)
         speaker_row = QHBoxLayout()
         speaker_row.setSpacing(8)
-        speaker_row.addWidget(self.segment_caption)
         speaker_row.addWidget(label("说话人"))
         self.segment_speaker = QComboBox()
         self.segment_speaker.setMinimumWidth(100)
@@ -321,10 +383,24 @@ class MainWindow(QMainWindow):
         speaker_row.addWidget(self.segment_speaker, 1)
         speaker_row.addWidget(button("添加", self._add_speaker))
         speaker_row.addWidget(button("声音配置", self._edit_segment_speaker))
-        form.addLayout(speaker_row, 0, 0, 1, 2)
-        middle.addWidget(self.editor_box, 2)
+        details.addLayout(speaker_row, 3, 0, 1, 2)
+        self.advanced_fields.hide()
+        form.addWidget(self.advanced_fields, 4, 0, 1, 2)
+        confirm_row = QHBoxLayout()
+        confirm_row.addWidget(button("回听这一句", self._replay_segment))
+        confirm_row.addStretch()
+        self.confirm_next_button = button("确认本句并继续", self._confirm_next_segment)
+        confirm_row.addWidget(self.confirm_next_button)
+        form.addLayout(confirm_row, 5, 0, 1, 2)
+        self.editor_scroll = QScrollArea()
+        self.editor_scroll.setWidgetResizable(True)
+        self.editor_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.editor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.editor_scroll.setMinimumHeight(250)
+        self.editor_scroll.setWidget(self.editor_box)
+        middle.addWidget(self.editor_scroll, 2)
         split.addWidget(center)
-        evidence = QWidget()
+        evidence = self.evidence_panel = QWidget()
         side = QVBoxLayout(evidence)
         side.setContentsMargins(0, 0, 0, 0)
         side.addWidget(label("公式与原始证据"))
@@ -344,7 +420,9 @@ class MainWindow(QMainWindow):
         side.addWidget(button("编辑课程术语", self._edit_term))
         side.addWidget(label("双击公式或术语可修改。来源列表可跳回原课；待确认表达请回听原音。", "description"))
         split.addWidget(evidence)
-        split.setSizes([300, 720, 270])
+        evidence.hide()
+        self.segment_table.setColumnHidden(1, True)
+        split.setSizes([300, 900, 0])
         return page
 
     def _media_panel(self):
@@ -355,7 +433,7 @@ class MainWindow(QMainWindow):
         self.media_status = label("未关联可播放媒体", "description")
         layout.addWidget(self.media_status)
         self.video = QVideoWidget()
-        self.video.setMinimumHeight(200)
+        self.video.setMinimumHeight(160)
         self.video.setStyleSheet("background: #19253b; border-radius: 8px;")
         layout.addWidget(self.video)
         self.audio_output = QAudioOutput(self)
@@ -374,21 +452,31 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.play_button)
         controls.addWidget(button("重连媒体", self._relink_media))
         layout.addLayout(controls)
-        layout.addWidget(self._stage_button("提取当前帧证据", "frame", options=lambda: {"time_ms": self.player.position()}))
+        self.frame_tools = QWidget()
+        tools = QVBoxLayout(self.frame_tools)
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.addWidget(self._stage_button("提取当前帧证据", "frame", options=lambda: {"time_ms": self.player.position()}))
         self.frame_preview = label("尚无提取帧\n可在原课中定位并提取当前画面", "description")
         self.frame_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.frame_preview.setMinimumHeight(130)
         self.frame_preview.setMaximumHeight(230)
-        layout.addWidget(self.frame_preview)
+        tools.addWidget(self.frame_preview)
         self.add_formula_button = button("框选并添加公式证据", self._add_visual_formula)
         self.add_formula_button.setEnabled(False)
-        layout.addWidget(self.add_formula_button)
-        layout.addWidget(label("帧提取不会自动认定公式。复杂手写或画面遮挡时应保留原图并人工校对。", "description"))
+        tools.addWidget(self.add_formula_button)
+        tools.addWidget(label("帧提取不会自动认定公式。复杂手写或画面遮挡时应保留原图并人工校对。", "description"))
+        self.frame_tools.hide()
+        layout.addWidget(self.frame_tools)
         layout.addStretch()
         self.player.positionChanged.connect(self._player_position)
         self.player.durationChanged.connect(lambda value: self.play_slider.setRange(0, value))
         self.player.errorOccurred.connect(lambda _error, message: self._log("播放器：" + message))
-        return panel
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setMinimumWidth(245)
+        scroll.setWidget(panel)
+        return scroll
 
     def _dub_page(self):
         page = QWidget()
@@ -548,6 +636,7 @@ class MainWindow(QMainWindow):
 
     def _run(self, stage, options=None):
         if not self._commit_all():
+            self._notify_unsaved_action()
             return
         try:
             if stage == "frame":
@@ -744,8 +833,12 @@ class MainWindow(QMainWindow):
         if path:
             self._call("relink_source", path)
 
-    def _settings(self):
+    def _settings(self, tab_index=None):
         dialog = SettingsDialog(self.coordinator.settings, self)
+        if isinstance(tab_index, int) and not isinstance(tab_index, bool):
+            tabs = dialog.findChild(QTabWidget)
+            if tabs:
+                tabs.setCurrentIndex(tab_index)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             values = dialog.result_values()
             try:
@@ -762,6 +855,153 @@ class MainWindow(QMainWindow):
             save_settings(values)
             self._update_capabilities()
 
+    def _refresh_review_guidance(self):
+        if not hasattr(self, "review_next_button"):
+            return
+        state = review_guidance(self._project, self.coordinator.settings,
+                                busy=self._view_busy or bool(getattr(self.coordinator, "busy", False)),
+                                dirty=self._segment_dirty or self._note_dirty)
+        self.review_guide_state = state
+        segment = self._segment(self._segment_id)
+        ready = segment and segment.get("review") != "confirmed" and all(
+            segment.get(key, "").strip() for key in ("target_text", "subtitle_plain", "tts_text"))
+        caption = state["label"]
+        if state["action"] in {"review", "next_pending"} and ready and state["enabled"]:
+            caption = "确认本句并继续"
+        self.review_next_button.setText(caption)
+        self.review_next_button.setEnabled(bool(state["enabled"]))
+        if caption == "确认本句并继续":
+            self.review_guide_title.setText("检查当前句，确认后继续")
+            self.review_guide_description.setText("先回听这一句，再检查目标字幕；确认无误后点击右侧蓝色按钮，继续下一句。")
+        else:
+            self.review_guide_title.setText(state["title"])
+            self.review_guide_description.setText(state["description"])
+        self.review_progress.setText(state["progress"])
+        idle = not (self._view_busy or bool(getattr(self.coordinator, "busy", False)))
+        self.confirm_next_button.setEnabled(bool(ready) and idle)
+        self.review_import_subtitles_button.setVisible(not bool((self._project or {}).get("segments")))
+        self.review_import_subtitles_button.setEnabled(bool(self._project) and idle)
+        self.review_manual_button.setVisible(bool((self._project or {}).get("segments")) and any(
+            not item.get("subtitle_plain", "").strip() for item in (self._project or {}).get("segments", [])))
+        self.review_manual_button.setEnabled(bool(self._project) and idle)
+        self.advanced_toggle.setEnabled(bool(self._project))
+
+    def _toggle_review_advanced(self, expanded):
+        for name in ("advanced_panel", "advanced_fields", "evidence_panel", "frame_tools"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(expanded)
+        if hasattr(self, "segment_table"):
+            self.segment_table.setColumnHidden(1, not expanded)
+        if hasattr(self, "review_split"):
+            self.review_split.setSizes([260, 680, 260] if expanded else [300, 900, 0])
+
+    def _manual_review(self):
+        if not self._commit_all():
+            return
+        segments = (self._project or {}).get("segments", [])
+        segment = next((s for s in segments if not s.get("subtitle_plain", "").strip()), None)
+        segment = segment or next((s for s in segments if s.get("review") != "confirmed"), None)
+        segment = segment or (segments[0] if segments else None)
+        if segment:
+            self.filter.setChecked(False)
+            self._select_segment(segment["id"])
+            self.segment_fields["subtitle_plain"].setFocus()
+        self._refresh_review_guidance()
+
+    def _focus_pending_segment(self, after_id=None):
+        segments = (self._project or {}).get("segments", [])
+        start = next((index + 1 for index, item in enumerate(segments) if item["id"] == after_id), 0)
+        ordered = segments[start:] + segments[:start]
+        target = next((item for item in ordered if item.get("review") != "confirmed"), None)
+        if target:
+            self.filter.setChecked(False)
+            self._select_segment(target["id"])
+            self.segment_fields["subtitle_plain"].setFocus()
+        self._refresh_review_guidance()
+        return bool(target)
+
+    def _focus_formula_review(self):
+        pending = [item["id"] for item in (self._project or {}).get("formulas", []) if item.get("review") == "needs_review"]
+        if not pending:
+            return
+        self.advanced_toggle.setChecked(True)
+        self.filter.setChecked(False)
+        segment = next((item for item in self._project.get("segments", []) if pending[0] in item.get("formula_ids", [])), None)
+        if segment:
+            self._select_segment(segment["id"])
+        else:
+            self._load_segment(None)
+        for row in range(self.formula_list.count()):
+            if self.formula_list.item(row).data(Qt.ItemDataRole.UserRole) == pending[0]:
+                self.formula_list.setCurrentRow(row)
+                self.formula_list.setFocus()
+                break
+        self.review_edit_notice.setText("还有公式需要单独检查。请在右侧选中公式，回听原音后确认公式和配音读法。")
+
+    def _review_next(self):
+        if not self._commit_all():
+            self._notify_unsaved_action()
+            return
+        self._refresh_review_guidance()
+        state = self.review_guide_state
+        if not state["enabled"]:
+            return
+        action = state["action"]
+        segment = self._segment(self._segment_id)
+        ready = segment and segment.get("review") != "confirmed" and all(
+            segment.get(key, "").strip() for key in ("target_text", "subtitle_plain", "tts_text"))
+        if action in {"review", "next_pending"} and ready:
+            self._confirm_next_segment()
+        elif action == "import_video":
+            self.tabs.setCurrentIndex(0)
+            self.media_path.setFocus()
+        elif action == "configure_asr":
+            self._settings(0)
+        elif action == "transcribe":
+            self._run("transcribe")
+        elif action == "configure_translation":
+            self._settings(1)
+        elif action == "prepare_translation":
+            self._run("prepare_translation")
+        elif action == "go_dub":
+            self.tabs.setCurrentIndex(2)
+        elif action == "review" and state.get("pending_formulas", 0) and state.get("step", 0) >= 3:
+            self._focus_formula_review()
+        elif action == "review":
+            self._manual_review()
+        elif action == "next_pending":
+            self._focus_pending_segment()
+
+    def _confirm_next_segment(self):
+        if self._view_busy or bool(getattr(self.coordinator, "busy", False)) or not self._commit_all():
+            return
+        segment = self._segment(self._segment_id)
+        if not segment:
+            self._focus_pending_segment()
+            return
+        if not all(segment.get(key, "").strip() for key in ("target_text", "subtitle_plain", "tts_text")):
+            self.review_edit_notice.setText("本句还缺少目标字幕或配音读法。请先填写字幕；含公式时展开高级工具检查专用译文和读法。")
+            self.segment_fields["subtitle_plain"].setFocus()
+            self._refresh_review_guidance()
+            return
+        try:
+            if segment.get("review") != "confirmed":
+                self.coordinator.update_segment(segment["id"], {"review": "confirmed"})
+            if not self._focus_pending_segment(after_id=segment["id"]):
+                self.review_edit_notice.setText("所有句子已确认。请按照上方提示检查剩余公式，或点击“去配音”。")
+            self._refresh_review_guidance()
+        except Exception as error:
+            self._show_error(str(error))
+
+    def _replay_segment(self):
+        segment = self._segment(self._segment_id)
+        if segment:
+            self.dub_player.pause()
+            self._playback_stop_ms = segment["end_ms"]
+            self.player.setPosition(segment["start_ms"])
+            self.player.play()
+
     def _update_capabilities(self):
         cfg = self.coordinator.settings
         model = cfg.get("whisper_model_path", "")
@@ -772,6 +1012,7 @@ class MainWindow(QMainWindow):
         self.capabilities.setText(f"识别：{model_state}\n说话人：{diarization}\n文本：{provider}\n隐私：{permission}\n参考音色：可配置本机 GPT-SoVITS")
         self.voice_summary.setText(f"{cfg.get('voice') or '自动选择已安装的目标语言声音'} · 语速 {cfg.get('speech_rate', 0)}\n原声克隆服务：{cfg.get('voice_clone_api_url', 'http://127.0.0.1:9880')}")
         self._update_usage()
+        self._refresh_review_guidance()
 
     def _update_usage(self):
         usage = getattr(self.coordinator, "usage", {}) or {}
@@ -899,14 +1140,17 @@ class MainWindow(QMainWindow):
     def _segment(self, identifier):
         return next((s for s in (self._project or {}).get("segments", []) if s["id"] == identifier), None)
 
-    def _load_segment(self, identifier):
+    def _load_segment(self, identifier, *, seek=True):
         old = self._loading
         self._loading = True
         self._segment_id = identifier
         segment = self._segment(identifier)
         self.editor_box.setEnabled(bool(segment))
-        self.segment_caption.setText(identifier if segment else "选择片段")
-        self.segment_caption.setToolTip("修改内容会自动创建新 revision；顶部显示已保存后表示写入成功。")
+        index = next((index + 1 for index, item in enumerate((self._project or {}).get("segments", [])) if item["id"] == identifier), 0)
+        self.segment_caption.setText(f"正在校对第 {index} 句 · {timecode(segment['start_ms'])} – {timecode(segment['end_ms'])}" if segment else "选择上方一句，回听并检查字幕")
+        self.segment_caption.setToolTip("修改会自动保存；检查完请点击“确认本句并继续”。")
+        target_language = (self._project or {}).get("languages", {}).get("target", "")
+        self.subtitle_caption.setText("中文字幕" if target_language.startswith("zh") else "英文字幕" if target_language.startswith("en") else "目标字幕")
         for key, field in self.segment_fields.items():
             field.setPlainText(segment.get(key, "") if segment else "")
         self.start_time.setValue(segment.get("start_ms", 0) / 1000 if segment else 0)
@@ -914,10 +1158,15 @@ class MainWindow(QMainWindow):
         self.segment_review.setCurrentIndex(max(0, self.segment_review.findData(segment.get("review") if segment else "needs_review")))
         self.segment_speaker.setCurrentIndex(max(0, self.segment_speaker.findData(segment.get("speaker_id") if segment else None)))
         self._refresh_formulas(segment)
-        if segment:
+        if segment and seek:
+            self.player.pause()
+            self._playback_stop_ms = None
             self.player.setPosition(segment["start_ms"])
         self._segment_dirty = False
+        self._simple_formula_blocked = None
+        self.review_edit_notice.setText("普通句子的译文和配音读法会随字幕更新；含公式时保留专用读法。")
         self._loading = old
+        self._refresh_review_guidance()
 
     def _mark_segment_dirty(self, *_):
         if self._loading or not self._segment_id:
@@ -928,6 +1177,7 @@ class MainWindow(QMainWindow):
         self._segment_timer.start()
         if self._latest_audio:
             self.dub_status.setText("文案已修改；已有配音需要重新生成后才能作为当前版本使用。")
+        self._refresh_review_guidance()
 
     def _commit_segment(self):
         self._segment_timer.stop()
@@ -942,16 +1192,34 @@ class MainWindow(QMainWindow):
             return False
         try:
             self._committing = True
-            self.coordinator.update_segment(self._segment_id, changes)
+            original = self._segment(self._segment_id)
+            subtitle_changed = changes["subtitle_plain"] != original["subtitle_plain"]
+            advanced_changed = any(changes[key] != original[key] for key in ("target_text", "tts_text"))
+            retry_simple = self._simple_formula_blocked is not None and all(
+                changes[key] == self._simple_formula_blocked[key] for key in ("target_text", "tts_text"))
+            source_changed = changes["source_text"] != original["source_text"]
+            if subtitle_changed and (retry_simple or not self.advanced_toggle.isChecked() and not advanced_changed):
+                metadata = {key: value for key, value in changes.items() if key not in ("target_text", "subtitle_plain", "tts_text")}
+                self.coordinator.update_simple_subtitle(self._segment_id, changes["subtitle_plain"], changes=metadata)
+            else:
+                self.coordinator.update_segment(self._segment_id, changes)
             self._segment_dirty = False
             self._sync_editor_dirty()
+            self._load_segment(self._segment_id, seek=False)
+            if source_changed:
+                self.review_edit_notice.setText("原文已修改，请重新生成或填写本句译文，再继续校对。")
             return True
         except Exception as error:
             self.saved.setText("尚未保存 · 请检查输入")
             self._log("片段保存失败：" + str(error))
+            if "FORMULA_REVIEW_REQUIRED" in str(error):
+                self._simple_formula_blocked = {key: changes[key] for key in ("target_text", "tts_text")}
+                self.advanced_toggle.setChecked(True)
+                self.review_edit_notice.setText("本句公式需单独检查，请在高级工具中检查公式和配音读法。当前编辑尚未保存。")
             return False
         finally:
             self._committing = False
+            self._refresh_review_guidance()
 
     def _refresh_formulas(self, segment=None):
         self.formula_list.clear()
@@ -1175,12 +1443,14 @@ class MainWindow(QMainWindow):
             self._select_segment(issue["entity_id"])
 
     def _busy(self, busy):
+        self._view_busy = bool(busy)
         self._update_usage()
         for widget in self._stage_buttons:
             widget.setEnabled(bool(self._project) and not busy)
         self.cancel_button.setEnabled(busy)
         self.create_button.setEnabled(not busy)
         self.import_subtitles_button.setEnabled(bool(self._project) and not busy)
+        self._refresh_review_guidance()
         if not busy:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
@@ -1256,13 +1526,26 @@ class MainWindow(QMainWindow):
         if stage == "preview" and not payload.get("metadata", {}).get("stale"):
             self.stage_label.setText("待校对预览已生成 · 在最近文件中双击 preview.mp4 播放")
         self._refresh_issues()
+        if stage in {"transcribe", "import_subtitles", "translate"} and self._project and not metadata.get("stale"):
+            self._focus_pending_segment()
+        self._refresh_review_guidance()
 
     def _failed(self, stage, message):
         self._update_usage()
-        self.stage_label.setText(f"{STAGES.get(stage, stage)}未完成")
+        self.stage_label.setText(f"{STAGES.get(stage, stage)}未完成 · {str(message)[:90]}")
         self._log(f"{stage}: {message}")
+        self.log.show()
+        if stage in {"transcribe", "create", "diarize"}:
+            self.review_edit_notice.setText(f"{STAGES.get(stage, stage)}未完成：{message}")
         if not self._closing_requested and "取消" not in message:
             self._show_error(message)
+
+    def _notify_unsaved_action(self):
+        message = "当前编辑尚未保存，暂时不能开始任务。" + self.saved.text()
+        self.review_edit_notice.setText(message)
+        self.stage_label.setText(message)
+        self._log(message)
+        self.log.show()
 
     def _cancel(self):
         self.coordinator.cancel()
@@ -1270,6 +1553,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
 
     def _toggle_play(self):
+        self._playback_stop_ms = None
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         else:
@@ -1287,6 +1571,9 @@ class MainWindow(QMainWindow):
                 self.dub_player.play()
 
     def _player_position(self, value):
+        if self._playback_stop_ms is not None and value >= self._playback_stop_ms:
+            self.player.pause()
+            self._playback_stop_ms = None
         if not self.play_slider.isSliderDown():
             self.play_slider.setValue(value)
         self.player_time.setText(f"{timecode(value)} / {timecode(self.player.duration())}")
@@ -1326,7 +1613,8 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "课译 MathBridge", str(message))
 
     def _about(self):
-        QMessageBox.information(self, "关于课译 MathBridge", "课译 MathBridge 0.1\n\n本地数学课程翻译与校对工作台。\n支持字幕校对、课程术语、公式证据、多人声线配置和多格式导出。\n\nASR 与自动区分说话人需本地模型；原声克隆需另行启动本机 GPT-SoVITS 服务。文本 API 需单独授权。克隆音色需试听确认，自动手写公式 OCR 仍待实现。")
+        from mathbridge import __version__
+        QMessageBox.information(self, "关于课译 MathBridge", f"课译 MathBridge {__version__}\n\n本地数学课程翻译与校对工作台。\n支持字幕校对、课程术语、公式证据、多人声线配置和多格式导出。\n\nASR 与自动区分说话人需本地模型；原声克隆需另行启动本机 GPT-SoVITS 服务。文本 API 需单独授权。克隆音色需试听确认，自动手写公式 OCR 仍待实现。")
 
     def closeEvent(self, event):
         if not self._commit_all():

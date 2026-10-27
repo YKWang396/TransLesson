@@ -1,4 +1,5 @@
 {
+  "application_version": "0.1.1",
   "platform": "Windows-11-10.0.26200-SP0",
   "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
   "packages": [
@@ -498,8 +499,8 @@
     }
   ],
   "node": {
-    "version": "v24.19.0",
-    "sha256": "3602f2bb1a10f2cbab4c36886218a33c1ab3db87290e73b033c46c77147d0237",
+    "version": "v24.22.1",
+    "sha256": "6d75619e8720161bb0e8c5617bcf90384b48a920b9182ec6e9d52f11f83a8e84",
     "license_status": "Upstream Node.js and bundled third-party license collection required before public redistribution"
   },
   "mathjax": {
