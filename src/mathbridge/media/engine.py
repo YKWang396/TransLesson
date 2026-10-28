@@ -22,8 +22,9 @@ import wave
 
 
 class MediaError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, issues=None):
         self.code = code
+        self.issues = issues or []
         super().__init__(f"{code}: {message}")
 
 
@@ -339,7 +340,9 @@ class MediaEngine:
         except (wave.Error, EOFError):
             return self.probe(path)["duration_ms"] / 1000
 
-    def align_and_mix(self, clips, dest, duration_ms, source=None, background="dub_only") -> Path:
+    def align_and_mix(self, clips, dest, duration_ms, source=None, background="dub_only", *,
+                      alignment_max_speed=1.15, alignment_borrow_ms=1000) -> Path:
+        from mathbridge.application.alignment import duration_issue, plan_alignment
         background = {"quiet_original": "low_original", "original": "original_only"}.get(background, background)
         if background not in ("dub_only", "low_original", "original_only"):
             raise MediaError("BACKGROUND_UNAVAILABLE", "仅支持译声、低音量原声旁白或保留原声。")
@@ -351,14 +354,19 @@ class MediaEngine:
         dest.parent.mkdir(parents=True, exist_ok=True)
         rate, channels, width = 48000, 2, 2
         total_frames = round(duration_ms * rate / 1000)
-        ordered = sorted(clips, key=lambda c: c["start_ms"])
-        previous_end = 0
-        for clip in ordered:
-            start, end = clip["start_ms"], clip["end_ms"]
-            if not (0 <= start < end <= duration_ms) or start < previous_end:
-                raise MediaError("INVALID_TIMELINE", "配音区间越界或重叠。")
+        measured = []
+        for clip in clips:
+            self._check()
             self._source(clip["path"])
-            previous_end = end
+            measured.append(dict(clip, speech_ms=self._audio_duration(clip["path"]) * 1000))
+        try:
+            ordered, issues = plan_alignment(measured, duration_ms,
+                dict(alignment_max_speed=alignment_max_speed, alignment_borrow_ms=alignment_borrow_ms))
+        except ValueError as exc:
+            code, _, message = str(exc).partition(": ")
+            raise MediaError(code, message) from exc
+        if issues:
+            raise MediaError("TTS_TOO_LONG", f"共有 {len(issues)} 句配音过长。{issues[0]['message']}", issues=issues)
         with tempfile.TemporaryDirectory(prefix="mathbridge-mix-", dir=dest.parent) as folder:
             folder = Path(folder)
             aligned = folder / "aligned.wav"
@@ -376,11 +384,8 @@ class MediaEngine:
                 for index, clip in enumerate(ordered):
                     self._check()
                     start_frame = round(clip["start_ms"] * rate / 1000)
-                    window = (clip["end_ms"] - clip["start_ms"]) / 1000
-                    original_duration = self._audio_duration(clip["path"])
-                    speed = max(1.0, original_duration / window)
-                    if speed > 1.15 + 1e-8:
-                        raise MediaError("TTS_TOO_LONG", f"第 {index + 1} 段配音需 {speed:.2f} 倍速，请缩短读法或调整分段。")
+                    window = clip["available_ms"] / 1000
+                    speed = clip["speed"]
                     normalized = folder / f"clip-{index}.wav"
                     for attempt in range(2):
                         self._ffmpeg(["-i", clip["path"], "-vn", "-af", f"atempo={speed:.9f}",
@@ -391,8 +396,10 @@ class MediaEngine:
                         if count <= capacity:
                             break
                         speed = max(speed * count / capacity * 1.001, speed + .001)
-                        if speed > 1.15 or attempt == 1:
-                            raise MediaError("TTS_TOO_LONG", f"第 {index + 1} 段配音仍放不下，已保留完整音频，请调整读法。")
+                        if speed > alignment_max_speed or attempt == 1:
+                            issue = duration_issue(clip, alignment_max_speed)
+                            issue["message"] += " 音频编码后的长度仍超过可用时间，已保留完整原配音。"
+                            raise MediaError("TTS_TOO_LONG", issue["message"], issues=[issue])
                     silence(start_frame - written)
                     with wave.open(str(normalized), "rb") as audio:
                         while raw := audio.readframes(rate):

@@ -92,7 +92,10 @@ class Coordinator(QObject):
         if self.project is None:
             raise ValueError("请先打开项目")
         previous = copy.deepcopy(self.project)
-        candidate = changed_copy(self.project, collection, entity_id, changes)
+        original = next((item for item in self.project[collection] if item["id"] == entity_id), None)
+        if original is not None and all(key in original and original[key] == value for key, value in changes.items()):
+            return
+        candidate = changed_copy(self.project, collection, entity_id, changes, _validate=False)
         self._save_edit(candidate, previous)
 
     def _save_edit(self, candidate, previous):
@@ -125,7 +128,9 @@ class Coordinator(QObject):
             changes["review"] = "needs_review"
         if "speaker_id" in changes and changes["speaker_id"] != original["speaker_id"]:
             changes["review"] = "needs_review"
-        candidate = changed_copy(self.project, "segments", segment_id, changes)
+        if all(key in original and original[key] == value for key, value in changes.items()):
+            return
+        candidate = changed_copy(self.project, "segments", segment_id, changes, _validate=False)
         if source_changed:
             for formula in candidate["formulas"]:
                 if formula["id"] in original["formula_ids"]:
@@ -156,6 +161,135 @@ class Coordinator(QObject):
             edits.update(simple_subtitle_changes(self.project, original, subtitle_text))
         if any(original.get(key) != value for key, value in edits.items()):
             self.update_segment(segment_id, edits, _derived_fresh=fresh)
+
+    def bulk_confirm_segments(self, segment_ids=None):
+        """Confirm explicitly selected complete subtitles in one undoable save."""
+        if not self.project:
+            raise ValueError("请先打开项目")
+        if self.busy:
+            raise ValueError("请先等待当前任务完成")
+        selected = set(segment_ids) if segment_ids is not None else {s["id"] for s in self.project["segments"]}
+        if not selected.issubset({s["id"] for s in self.project["segments"]}):
+            raise ValueError("片段不存在")
+        candidate = copy.deepcopy(self.project)
+        confirmed = skipped = 0
+        for segment in candidate["segments"]:
+            if segment["id"] not in selected or segment["review"] == "confirmed":
+                continue
+            if any(not segment[key].strip() for key in ("target_text", "subtitle_plain", "tts_text")):
+                skipped += 1
+                continue
+            segment["review"] = "confirmed"
+            confirmed += 1
+        if confirmed:
+            candidate["revision"] += 1
+            self._save_edit(candidate, copy.deepcopy(self.project))
+        return dict(confirmed=confirmed, skipped=skipped)
+
+    def preserve_pending_formulas(self):
+        """Explicitly retain original evidence without confirming math guesses."""
+        from mathbridge.application.issues import preservable_formula_ids
+        if not self.project:
+            raise ValueError("请先打开项目")
+        if self.busy:
+            raise ValueError("请先等待当前任务完成")
+        identifiers = set(preservable_formula_ids(self.project, self.project_dir))
+        candidate = copy.deepcopy(self.project)
+        for formula in candidate["formulas"]:
+            if formula["id"] in identifiers:
+                formula["review"] = "preserve_source"
+        if identifiers:
+            candidate["revision"] += 1
+            self._save_edit(candidate, copy.deepcopy(self.project))
+        return dict(preserved=len(identifiers), remaining=sum(f["review"] == "needs_review" for f in candidate["formulas"]))
+
+    def repair_obsolete_formulas(self):
+        """Remove only provable former substring-rule errors, preserving source."""
+        from mathbridge.application.issues import obsolete_rule_formula_ids
+        if not self.project:
+            raise ValueError("请先打开项目")
+        if self.busy:
+            raise ValueError("请先等待当前任务完成")
+        identifiers = set(obsolete_rule_formula_ids(self.project))
+        candidate = copy.deepcopy(self.project)
+        affected = []
+        for segment in candidate["segments"]:
+            if identifiers.intersection(segment["formula_ids"]):
+                segment["formula_ids"] = [identifier for identifier in segment["formula_ids"] if identifier not in identifiers]
+                segment.update(target_text="", subtitle_plain="", tts_text="", review="needs_review")
+                affected.append(segment["id"])
+        affected_set = set(affected)
+        original_formulas = {formula["id"]: formula for formula in candidate["formulas"]}
+        for note in candidate["notes"]:
+            removed = identifiers.intersection(note["formula_ids"])
+            if removed or affected_set.intersection(note["segment_ids"]):
+                note["formula_ids"] = [identifier for identifier in note["formula_ids"] if identifier not in identifiers]
+                for identifier in removed:
+                    note["body"] = note["body"].replace("{{" + identifier + "}}", original_formulas[identifier]["raw"])
+                note["review"] = "needs_review"
+                # A formula-only course note needs its original source segment
+                # after its obsolete formula reference has been removed.
+                if note["kind"] == "course" and not note["formula_ids"] and not note["segment_ids"]:
+                    note["segment_ids"] = list(affected)
+        candidate["formulas"] = [formula for formula in candidate["formulas"] if formula["id"] not in identifiers]
+        if identifiers:
+            candidate["revision"] += 1
+            self._save_edit(candidate, copy.deepcopy(self.project))
+        return dict(removed=len(identifiers), affected=len(affected), segment_ids=affected)
+
+    def merge_segments(self, first_id, second_id):
+        self.bulk_merge_segments([[first_id, second_id]])
+        return first_id
+
+    def bulk_merge_segments(self, groups):
+        """Merge adjacent same-speaker groups in one revision, keeping evidence."""
+        if not self.project:
+            raise ValueError("请先打开项目")
+        if self.busy:
+            raise ValueError("请先等待当前任务完成")
+        ordered = sorted(self.project["segments"], key=lambda item: item["start_ms"])
+        positions = {segment["id"]: index for index, segment in enumerate(ordered)}
+        consumed = set()
+        checked = []
+        for group in groups:
+            if len(group) < 2 or any(identifier not in positions for identifier in group):
+                raise ValueError("每组合并至少需要两个存在的相邻片段")
+            indices = [positions[identifier] for identifier in group]
+            if indices != list(range(indices[0], indices[0] + len(indices))) or consumed.intersection(group):
+                raise ValueError("只能按时间顺序合并不重复的相邻片段")
+            originals = [ordered[index] for index in indices]
+            if len({segment["speaker_id"] for segment in originals}) != 1:
+                raise ValueError("说话人不同，请先核对说话人后再合并")
+            checked.append(originals)
+            consumed.update(group)
+        if not checked:
+            return dict(merged=0, groups=0, segment_ids=[])
+        candidate = copy.deepcopy(self.project)
+        by_id = {segment["id"]: segment for segment in candidate["segments"]}
+        replacements = {}
+        kept_ids = []
+        for originals in checked:
+            first = by_id[originals[0]["id"]]
+            kept_ids.append(first["id"])
+            first["end_ms"] = originals[-1]["end_ms"]
+            for field in ("source_text", "target_text", "subtitle_plain", "tts_text"):
+                language = candidate["languages"]["source" if field == "source_text" else "target"]
+                separator = "" if language.startswith("zh") else " "
+                texts = [segment[field].strip() for segment in originals]
+                first[field] = separator.join(texts) if all(texts) else ""
+            for field in ("formula_ids", "term_ids"):
+                first[field] = list(dict.fromkeys(identifier for segment in originals for identifier in segment[field]))
+            first["review"] = "needs_review"
+            for original in originals[1:]:
+                replacements[original["id"]] = first["id"]
+        candidate["segments"] = [segment for segment in candidate["segments"] if segment["id"] not in replacements]
+        for note in candidate["notes"]:
+            if consumed.intersection(note["segment_ids"]):
+                note["segment_ids"] = list(dict.fromkeys(replacements.get(identifier, identifier) for identifier in note["segment_ids"]))
+                note["review"] = "needs_review"
+        candidate["revision"] += 1
+        self._save_edit(candidate, copy.deepcopy(self.project))
+        return dict(merged=len(replacements), groups=len(checked), segment_ids=kept_ids)
 
     def add_speaker(self, label):
         if not self.project:
@@ -231,7 +365,9 @@ class Coordinator(QObject):
     def update_formula(self, entity_id, changes):
         previous = copy.deepcopy(self.project)
         original = next(f for f in self.project["formulas"] if f["id"] == entity_id)
-        candidate = changed_copy(self.project, "formulas", entity_id, changes)
+        if all(key in original and original[key] == value for key, value in changes.items()):
+            return
+        candidate = changed_copy(self.project, "formulas", entity_id, changes, _validate=False)
         latex_changed = "latex" in changes and changes["latex"] != original["latex"]
         reading_changed = "spoken_target" in changes and changes["spoken_target"] != original["spoken_target"]
         if latex_changed or reading_changed:
@@ -251,7 +387,9 @@ class Coordinator(QObject):
     def update_term(self, entity_id, changes):
         previous = copy.deepcopy(self.project)
         original = next(t for t in self.project["glossary"] if t["id"] == entity_id)
-        candidate = changed_copy(self.project, "glossary", entity_id, changes)
+        if all(key in original and original[key] == value for key, value in changes.items()):
+            return
+        candidate = changed_copy(self.project, "glossary", entity_id, changes, _validate=False)
         if any(k in changes and changes[k] != original[k] for k in ("source", "target", "context")):
             affected = set()
             for segment in candidate["segments"]:
@@ -308,6 +446,10 @@ class Coordinator(QObject):
         return export_issues(self.project, formats)
 
     def run_stage(self, stage, options=None):
+        if stage == "translate_missing":
+            self._pipeline = []
+            self._start("translate", {**(options or {}), "missing_only": True})
+            return
         if stage == "prepare_translation":
             if self.busy:
                 raise ValueError("已有任务运行")

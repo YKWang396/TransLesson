@@ -165,13 +165,16 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         if not project["segments"]:
             raise ValueError("EMPTY_TRANSCRIPT: 请先转写或导入字幕")
         from mathbridge.providers.translation.deepseek import translate
-        data = translate(project, settings, cancel=cancel, progress=progress)
+        translation_settings = dict(settings, _translation_missing_only=bool(options.get("missing_only")))
+        data = translate(project, translation_settings, cancel=cancel, progress=progress)
         for key in ("segments", "formulas", "glossary", "notes"):
             if key in data:
                 project[key] = data[key]
         metadata["usage"] = data.get("usage", {})
 
     elif stage in {"dub", "preview"}:
+        from mathbridge.application.alignment import alignment_options, cached_alignment_report
+        alignment_config = alignment_options(options)
         requested = options.get("segment_ids")
         segments = [s for s in project["segments"] if not requested or s["id"] in requested]
         if stage == "preview" and not requested:
@@ -223,17 +226,34 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
             outputs.append(str(dest))
         if options.get("sample_only"):
             return dict(artifacts=artifacts, outputs=outputs, metadata=dict(speaker_id=segments[0]["speaker_id"], sample=True))
-        clips = [dict(path=str(safe_path(root, a["path"])), start_ms=s["start_ms"], end_ms=s["end_ms"])
+        all_segments = sorted(project["segments"], key=lambda item: item["start_ms"])
+        boundaries = {s["id"]: dict(index=i + 1, limit_end_ms=all_segments[i + 1]["start_ms"]
+                      if i + 1 < len(all_segments) else project["source"]["duration_ms"])
+                      for i, s in enumerate(all_segments)}
+        clips = [dict(path=str(safe_path(root, a["path"])), start_ms=s["start_ms"], end_ms=s["end_ms"],
+                      segment_id=s["id"], **boundaries[s["id"]])
                  for s, a in zip(segments, artifacts)]
+        alignment_report = cached_alignment_report(project, settings, root, alignment_config)
+        report_path = safe_path(root, "audio/alignment-issues.json" if stage == "dub" else "audio/preview-alignment-issues.json")
+        atomic_json(report_path, alignment_report)
         mixed = job_dir / "dub.wav"
-        engine().align_and_mix(clips, mixed, preview_duration, source=source, background=options.get("background", "dub_only"))
+        try:
+            engine().align_and_mix(clips, mixed, preview_duration, source=source,
+                                   background=options.get("background", "dub_only"), **alignment_config)
+        except Exception as exc:
+            if getattr(exc, "issues", None):
+                alignment_report["issues"] = exc.issues
+                atomic_json(report_path, alignment_report)
+            raise
         mixed_artifact = dict(id="mix-" + job_id[-20:], kind="mix", path=mixed.relative_to(root).as_posix(), sha256=file_hash(mixed, cancel),
-                              input_fingerprint=fingerprint({"segments": artifacts, "background": options.get("background", "dub_only"), "duration": project["source"]["duration_ms"]}),
+                              input_fingerprint=fingerprint({"segments": artifacts, "background": options.get("background", "dub_only"),
+                                                             "duration": project["source"]["duration_ms"], "alignment": alignment_config}),
                               input_revision=project["revision"], segment_ids=[s["id"] for s in segments],
                               depends_on=[dict(artifact_id=a["id"], sha256=a["sha256"]) for a in artifacts])
         artifacts.append(mixed_artifact)
         outputs.insert(0, str(mixed))
-        metadata.update(preview_revision=project["revision"], background=options.get("background", "dub_only"))
+        metadata.update(preview_revision=project["revision"], background=options.get("background", "dub_only"),
+                        alignment=alignment_report)
         if stage == "preview":
             from mathbridge.application.subtitles import write_subtitles
             preview_project = copy.deepcopy(project)
@@ -300,6 +320,8 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         mix_artifact = None
         background = options.get("background", "dub_only")
         if set(formats) & {"video", "wav"} and background != "original":
+            from mathbridge.application.alignment import alignment_options, cached_alignment_report
+            alignment_config = alignment_options(options)
             registry = command.get("artifacts", [])
             clips = []
             for segment in project["segments"]:
@@ -311,9 +333,13 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                 if not path.exists() or file_hash(path, cancel) != cached["sha256"]:
                     raise ValueError(f"ARTIFACT_CHANGED: {segment['id']} 配音文件已改变")
                 artifacts.append(cached)
-                clips.append(dict(path=str(path), start_ms=segment["start_ms"], end_ms=segment["end_ms"]))
+                clips.append(dict(path=str(path), start_ms=segment["start_ms"], end_ms=segment["end_ms"],
+                                  segment_id=segment["id"], index=len(clips) + 1))
             audio = directory / "lesson.wav"
-            engine().align_and_mix(clips, audio, project["source"]["duration_ms"], source=source, background=background)
+            atomic_json(safe_path(root, "audio/alignment-issues.json"),
+                        cached_alignment_report(project, settings, root, alignment_config))
+            engine().align_and_mix(clips, audio, project["source"]["duration_ms"], source=source,
+                                   background=background, **alignment_config)
             mix_artifact = add_artifact(audio, "mix", [dict(artifact_id=a["id"], sha256=a["sha256"]) for a in artifacts if a["kind"] == "tts"])
             if "wav" not in formats:
                 outputs.remove(str(audio))
@@ -405,7 +431,8 @@ def main():
             if secret:
                 message = message.replace(secret, "[redacted]")
         report(dict(type="done", status="cancelled" if cancelled else "failed", input_revision=command.get("project_revision", 0),
-                    code=getattr(exc, "code", type(exc).__name__), message=message[:3000], usage=getattr(exc, "usage", {})))
+                    code=getattr(exc, "code", type(exc).__name__), message=message[:3000], usage=getattr(exc, "usage", {}),
+                    issues=getattr(exc, "issues", [])))
         return 2
     return 0
 

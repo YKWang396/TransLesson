@@ -60,7 +60,9 @@ def _candidate(text: str) -> tuple[str, str | None, list[str]] | None:
         (r"x squared plus (?:two|2) x plus (?:one|1)", "x^2 + 2x + 1", []),
         (r"x\s*的?平方\s*加\s*(?:二|2)\s*x\s*加\s*(?:一|1)", "x^2 + 2x + 1", []),
         (r"e\s*的\s*x\s*次方", "e^x", []),
-        (r"e (?:to the (?:power of )?)?x", "e^x", []),
+        # An exponent needs explicit power wording. Bare ``e x`` can be a
+        # product, and matching inside ``the x``/``take x`` invented exponents.
+        (r"\be\s+to\s+the\s+(?:power\s+of\s+)?x\b", "e^x", []),
         (r"one over x plus one", None, ["AMBIGUOUS_DENOMINATOR", "候选: \\frac{1}{x}+1 | \\frac{1}{x+1}"]),
         (r"(?:一|1)\s*除以\s*x\s*加\s*(?:一|1)", None, ["AMBIGUOUS_DENOMINATOR", "候选: \\frac{1}{x}+1 | \\frac{1}{x+1}"]),
     ]

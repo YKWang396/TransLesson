@@ -76,7 +76,8 @@ def test_tts_mild_speedup_and_no_truncation(engine, tmp_path):
     assert out.is_file()
     too_long = tone(tmp_path / "too-long.wav", 1.5)
     with pytest.raises(MediaError, match="TTS_TOO_LONG"):
-        engine.align_and_mix([{"path": too_long, "start_ms": 0, "end_ms": 1000}], tmp_path / "rejected.wav", 2000)
+        engine.align_and_mix([{"path": too_long, "start_ms": 0, "end_ms": 1000}], tmp_path / "rejected.wav", 2000,
+                             alignment_borrow_ms=0)
     assert not (tmp_path / "rejected.wav").exists()
 
 

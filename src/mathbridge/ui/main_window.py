@@ -10,7 +10,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+    QHeaderView, QInputDialog, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSlider,
     QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from .editors import FormulaDialog, FrameEvidenceDialog, REVIEW_LABELS, SpeakerDialog, TermDialog, review_combo
 from .settings import SettingsDialog, load_settings, save_settings
 from .review_workflow import review_guidance
+from .issue_dialogs import SpokenTextDialog
 from .theme import STYLESHEET
 
 
@@ -78,6 +79,12 @@ class MainWindow(QMainWindow):
         self._last_outputs = []
         self._closing_requested = False
         self._view_busy = False
+        self._segment_lookup = {}
+        self._segment_numbers = {}
+        self._table_ids = []
+        self._problem_issues = []
+        self._alignment_report = {}
+        self._issues_key = None
         self._stage_buttons = []
         self._segment_timer = QTimer(self)
         self._segment_timer.setSingleShot(True)
@@ -257,7 +264,7 @@ class MainWindow(QMainWindow):
         guide_layout.setContentsMargins(14, 10, 14, 10)
         guide_text = QVBoxLayout()
         guide_text.setSpacing(3)
-        self.review_steps = label("1 获得原文    →    2 生成译文    →    3 逐句校对    →    4 去配音", "description")
+        self.review_steps = label("1 获得原文    →    2 生成译文    →    3 抽查与问题处理    →    4 去配音", "description")
         guide_text.addWidget(self.review_steps)
         self.review_guide_title = label("先导入一个课程视频", "guideTitle")
         guide_text.addWidget(self.review_guide_title)
@@ -280,7 +287,15 @@ class MainWindow(QMainWindow):
         options.addWidget(self.review_import_subtitles_button)
         self.review_manual_button = button("手动填写字幕", self._manual_review)
         options.addWidget(self.review_manual_button)
+        self.review_problems_button = button("问题清单", self._show_review_problems)
+        options.addWidget(self.review_problems_button)
+        self.bulk_confirm_button = button("批量确认已有字幕", self._bulk_confirm)
+        self.bulk_confirm_button.setToolTip("一次确认已填写完整的字幕，可撤销；公式仍需单独核对或保留原始证据。也可以先去配音，无需逐句点击确认。")
+        options.addWidget(self.bulk_confirm_button)
         options.addStretch()
+        self.problem_filter = QCheckBox("只看问题句")
+        self.problem_filter.toggled.connect(self._refresh_segment_table)
+        options.addWidget(self.problem_filter)
         self.filter = QCheckBox("只看待校对")
         self.filter.toggled.connect(self._refresh_segment_table)
         options.addWidget(self.filter)
@@ -316,14 +331,17 @@ class MainWindow(QMainWindow):
         self.segment_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.segment_table.setAlternatingRowColors(True)
         self.segment_table.verticalHeader().hide()
-        self.segment_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.segment_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.segment_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.segment_table.setColumnWidth(0, 115)
+        self.segment_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.segment_table.setColumnWidth(1, 80)
         self.segment_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.segment_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.segment_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.segment_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.segment_table.setColumnWidth(4, 75)
         self.segment_table.itemSelectionChanged.connect(self._segment_selected)
         middle.addWidget(self.segment_table, 3)
-        self.editor_box = QGroupBox("听原文，检查目标字幕，确认后继续下一句")
+        self.editor_box = QGroupBox("抽查字幕或处理问题句 · 修改自动保存")
         self.editor_box.setStyleSheet("QGroupBox { margin-top: 14px; padding: 6px 8px 6px; }")
         form = QGridLayout(self.editor_box)
         form.setVerticalSpacing(5)
@@ -337,7 +355,7 @@ class MainWindow(QMainWindow):
                 self.subtitle_caption = caption
             form.addWidget(caption, 1, col)
             field = QPlainTextEdit()
-            field.setFixedHeight(72)
+            field.setFixedHeight(64)
             field.textChanged.connect(self._mark_segment_dirty)
             self.segment_fields[key] = field
             form.addWidget(field, 2, col)
@@ -488,6 +506,18 @@ class MainWindow(QMainWindow):
         self.voice_summary = label("")
         form.addRow("当前声音", self.voice_summary)
         form.addRow(button("设置声音与语速", self._settings))
+        self.alignment_speed = QComboBox()
+        for caption, speed in (("自然（最高 1.15 倍）", 1.15), ("紧凑（最高 1.35 倍）", 1.35), ("快速（最高 1.50 倍）", 1.5)):
+            self.alignment_speed.addItem(caption, speed)
+        self.alignment_gap = QComboBox()
+        for caption, value in (("利用句后停顿，最多 1 秒", 1000), ("利用句后停顿，最多 2 秒", 2000), ("严格使用原句时间", 0)):
+            self.alignment_gap.addItem(caption, value)
+        form.addRow("时长适配", self.alignment_speed)
+        form.addRow("可用停顿", self.alignment_gap)
+        self.alignment_speed.currentIndexChanged.connect(self._reload_issues)
+        self.alignment_gap.currentIndexChanged.connect(self._reload_issues)
+        self.alignment_speed.setMinimumHeight(32)
+        self.alignment_gap.setMinimumHeight(32)
         layout.addWidget(group)
         self.speaker_table = QTableWidget(0, 4)
         self.speaker_table.setHorizontalHeaderLabels(["说话人", "片段数", "配音方式 / 声音", "参考原声"])
@@ -521,12 +551,33 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
         self.dub_status = label("尚未生成配音。请先校对片段中的“配音 · 实际读法”。", "notice")
         layout.addWidget(self.dub_status)
+        layout.addWidget(label("配音时长问题 · 双击直接修改读法或合并相邻句", "description"))
+        self.dub_issues = QListWidget()
+        self.dub_issues.setWordWrap(True)
+        self.dub_issues.setMinimumHeight(90)
+        self.dub_issues.setMaximumHeight(180)
+        self.dub_issues.itemDoubleClicked.connect(self._repair_dub_item)
+        layout.addWidget(self.dub_issues)
+        repair_row = QHBoxLayout()
+        self.repair_dub_button = button("处理选中句", self._repair_selected_dub)
+        repair_row.addWidget(self.repair_dub_button)
+        self.regroup_dub_button = button("自动整理配音分段", self._regroup_dub)
+        self.regroup_dub_button.setToolTip("根据已有配音时长合并被切碎的相邻语句；保留字幕、公式和讲义引用，可撤销，无需调用翻译 API。")
+        repair_row.addWidget(self.regroup_dub_button)
+        repair_row.addWidget(button("重新检查时长", self._reload_issues))
+        repair_row.addStretch()
+        layout.addLayout(repair_row)
         self.dub_player = QMediaPlayer(self)
         self.dub_audio = QAudioOutput(self)
         self.dub_player.setAudioOutput(self.dub_audio)
         self.dub_player.errorOccurred.connect(lambda _error, message: self._log("试听：" + message))
         layout.addStretch()
-        return page
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
 
     def _notes_page(self):
         page = QWidget()
@@ -606,8 +657,16 @@ class MainWindow(QMainWindow):
         row.addWidget(button("刷新检查", self._refresh_issues))
         right.addLayout(row)
         self.issues = QListWidget()
+        self.issues.setWordWrap(True)
         self.issues.itemDoubleClicked.connect(self._issue_clicked)
         right.addWidget(self.issues, 2)
+        right.addWidget(label("选中一项后点击处理，可直接跳到对应时间和句子。", "description"))
+        right.addWidget(button("处理选中问题", self._handle_selected_issue))
+        self.preserve_formulas_button = button("待确认公式：批量保留原始证据", self._preserve_formulas)
+        self.preserve_formulas_button.setToolTip("保留原始表达及原音 / 原画面出处，不将候选公式标为正确。若要核对候选公式，请逐项点击问题。")
+        right.addWidget(self.preserve_formulas_button)
+        self.repair_formulas_button = button("清除旧版误识别的公式", self._repair_obsolete_formulas)
+        right.addWidget(self.repair_formulas_button)
         right.addWidget(label("最近完成的文件", "description"))
         self.output_list = QListWidget()
         self.output_list.itemDoubleClicked.connect(self._open_output)
@@ -639,6 +698,8 @@ class MainWindow(QMainWindow):
             self._notify_unsaved_action()
             return
         try:
+            if stage in {"dub", "preview", "export"}:
+                options = {**self._alignment_options(), **(options or {})}
             if stage == "frame":
                 self._frame_requested_ms = (options or {}).get("time_ms", self.player.position())
             self.coordinator.run_stage(stage, options or {})
@@ -854,6 +915,7 @@ class MainWindow(QMainWindow):
             self.coordinator.settings.update(values)
             save_settings(values)
             self._update_capabilities()
+            self._reload_issues()
 
     def _refresh_review_guidance(self):
         if not hasattr(self, "review_next_button"):
@@ -885,6 +947,7 @@ class MainWindow(QMainWindow):
             not item.get("subtitle_plain", "").strip() for item in (self._project or {}).get("segments", [])))
         self.review_manual_button.setEnabled(bool(self._project) and idle)
         self.advanced_toggle.setEnabled(bool(self._project))
+        self.bulk_confirm_button.setEnabled(bool(self._project) and idle and any(s.get("review") != "confirmed" for s in (self._project or {}).get("segments", [])))
 
     def _toggle_review_advanced(self, expanded):
         for name in ("advanced_panel", "advanced_fields", "evidence_panel", "frame_tools"):
@@ -962,10 +1025,12 @@ class MainWindow(QMainWindow):
             self._run("transcribe")
         elif action == "configure_translation":
             self._settings(1)
-        elif action == "prepare_translation":
-            self._run("prepare_translation")
+        elif action in {"prepare_translation", "translate_missing"}:
+            self._run(action)
         elif action == "go_dub":
             self.tabs.setCurrentIndex(2)
+        elif action == "repair_formulas":
+            self._repair_obsolete_formulas()
         elif action == "review" and state.get("pending_formulas", 0) and state.get("step", 0) >= 3:
             self._focus_formula_review()
         elif action == "review":
@@ -1041,6 +1106,7 @@ class MainWindow(QMainWindow):
         self.usage_label.setStyleSheet("color: #a45440;" if reached else "color: #65738a;")
 
     def _refresh_project(self, project):
+        previous = self._project or {}
         old_project_id = (self._project or {}).get("project_id")
         new_project_id = (project or {}).get("project_id")
         if new_project_id != old_project_id:
@@ -1058,8 +1124,12 @@ class MainWindow(QMainWindow):
             self._load_note(None)
             self._sync_editor_dirty()
         self._project = project or None
+        self._segment_lookup = {item["id"]: item for item in (project or {}).get("segments", [])}
+        self._segment_numbers = {item["id"]: index + 1 for index, item in enumerate((project or {}).get("segments", []))}
         self._loading = True
-        self._refresh_speakers()
+        if (previous.get("speakers") != (project or {}).get("speakers")
+                or [(s["id"], s["speaker_id"]) for s in previous.get("segments", [])] != [(s["id"], s["speaker_id"]) for s in (project or {}).get("segments", [])]):
+            self._refresh_speakers()
         if project:
             self.project_title.setText(project.get("title", "课程项目"))
             self.saved.setText(f"已保存 · revision {project.get('revision', '?')}")
@@ -1072,8 +1142,10 @@ class MainWindow(QMainWindow):
             pending = sum(s.get("review") != "confirmed" for s in project.get("segments", []))
             self.count_label.setText(f"{len(project.get('segments', []))} 段 · {pending} 段待确认")
             self._refresh_segment_table()
-            self._refresh_terms()
-            self._refresh_notes()
+            if previous.get("glossary") != project.get("glossary"):
+                self._refresh_terms()
+            if previous.get("notes") != project.get("notes"):
+                self._refresh_notes()
             if self._segment_id and not self._committing and not self._segment_dirty:
                 self._load_segment(self._segment_id)
             elif not self._segment_id:
@@ -1082,6 +1154,7 @@ class MainWindow(QMainWindow):
             self.project_title.setText("尚未打开项目")
             self.count_label.setText("")
             self.segment_table.setRowCount(0)
+            self._table_ids = []
             self.formula_list.clear()
             self.term_list.clear()
             self.note_list.clear()
@@ -1090,7 +1163,11 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._busy(bool(getattr(self.coordinator, "busy", False)))
         self._update_capabilities()
-        self._refresh_issues()
+        self._issues_key = None
+        # Export validation and opening hundreds of cached WAV files need not
+        # run on every keystroke save. Refresh when their page is visible.
+        if new_project_id != old_project_id or self.tabs.currentIndex() in (2, 4):
+            self._refresh_issues()
 
     def _refresh_segment_table(self, *_):
         current_id = self._segment_id
@@ -1100,6 +1177,13 @@ class MainWindow(QMainWindow):
         segments = (self._project or {}).get("segments", [])
         if self.filter.isChecked():
             segments = [s for s in segments if s.get("review") != "confirmed"]
+        if self.problem_filter.isChecked():
+            identifiers = {item.get("segment_id") for item in self._problem_issues if item.get("severity") == "error"}
+            segments = [s for s in segments if s["id"] in identifiers]
+        new_ids = [item["id"] for item in segments]
+        same_rows = new_ids == self._table_ids
+        scroll = self.segment_table.verticalScrollBar().value()
+        self.segment_table.setUpdatesEnabled(False)
         self.segment_table.setRowCount(len(segments))
         selected_row = -1
         for row, segment in enumerate(segments):
@@ -1108,15 +1192,24 @@ class MainWindow(QMainWindow):
             speaker = self._speaker(segment.get("speaker_id")) or {}
             texts = [f"{segment['start_ms']/1000:.2f} –\n{segment['end_ms']/1000:.2f}", speaker.get("label", segment.get("speaker_id", "")), segment.get("source_text", ""), segment.get("subtitle_plain") or segment.get("target_text", ""), REVIEW_LABELS.get(segment.get("review"), "待校对")]
             for col, text in enumerate(texts):
-                item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, segment["id"])
-                item.setToolTip(text)
+                item = self.segment_table.item(row, col) if same_rows else None
+                if item is None:
+                    item = QTableWidgetItem(text)
+                    item.setData(Qt.ItemDataRole.UserRole, segment["id"])
+                    self.segment_table.setItem(row, col, item)
+                elif item.text() != text:
+                    item.setText(text)
+                if item.toolTip() != text:
+                    item.setToolTip(text)
                 if col == 4:
                     item.setForeground(QColor("#348264" if segment.get("review") == "confirmed" else "#a5742e"))
-                self.segment_table.setItem(row, col, item)
-            self.segment_table.setRowHeight(row, 82)
+            if not same_rows:
+                self.segment_table.setRowHeight(row, 72)
         if selected_row >= 0:
             self.segment_table.selectRow(selected_row)
+        self._table_ids = new_ids
+        self.segment_table.verticalScrollBar().setValue(scroll)
+        self.segment_table.setUpdatesEnabled(True)
         self.segment_table.blockSignals(False)
         self._loading = old
 
@@ -1138,7 +1231,7 @@ class MainWindow(QMainWindow):
         self._load_segment(new_id)
 
     def _segment(self, identifier):
-        return next((s for s in (self._project or {}).get("segments", []) if s["id"] == identifier), None)
+        return self._segment_lookup.get(identifier)
 
     def _load_segment(self, identifier, *, seek=True):
         old = self._loading
@@ -1146,7 +1239,7 @@ class MainWindow(QMainWindow):
         self._segment_id = identifier
         segment = self._segment(identifier)
         self.editor_box.setEnabled(bool(segment))
-        index = next((index + 1 for index, item in enumerate((self._project or {}).get("segments", [])) if item["id"] == identifier), 0)
+        index = self._segment_numbers.get(identifier, 0)
         self.segment_caption.setText(f"正在校对第 {index} 句 · {timecode(segment['start_ms'])} – {timecode(segment['end_ms'])}" if segment else "选择上方一句，回听并检查字幕")
         self.segment_caption.setToolTip("修改会自动保存；检查完请点击“确认本句并继续”。")
         target_language = (self._project or {}).get("languages", {}).get("target", "")
@@ -1413,10 +1506,31 @@ class MainWindow(QMainWindow):
             options["output_dir"] = self.export_directory.text().strip()
         return options
 
+    def _alignment_options(self):
+        return dict(alignment_max_speed=self.alignment_speed.currentData(), alignment_borrow_ms=self.alignment_gap.currentData())
+
+    def _reload_issues(self, *_):
+        self._issues_key = None
+        if hasattr(self, "issues"):
+            self._refresh_issues()
+
     def _refresh_issues(self, *_):
+        key = ((self._project or {}).get("project_id"), (self._project or {}).get("revision"),
+               tuple(key for key, check in self.format_checks.items() if check.isChecked()),
+               self.alignment_speed.currentData(), self.alignment_gap.currentData(),
+               self.coordinator.settings.get("voice"), self.coordinator.settings.get("speech_rate"))
+        if self._issues_key == key:
+            return
+        self._issues_key = key
         self.issues.clear()
+        self.dub_issues.clear()
+        self._alignment_report = {}
+        self._problem_issues = []
         if not self._project:
             self.issues.addItem("建立项目后显示导出检查结果。")
+            self.review_problems_button.setEnabled(False)
+            self.preserve_formulas_button.setEnabled(False)
+            self.repair_formulas_button.hide()
             return
         try:
             formats = [key for key, check in self.format_checks.items() if check.isChecked()]
@@ -1426,21 +1540,207 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self.issues.addItem(str(error))
             return
-        for issue in issues:
+        from mathbridge.application.issues import enriched_issues, obsolete_rule_formula_ids, preservable_formula_ids
+        from mathbridge.application.alignment import cached_alignment_report
+        root = getattr(self.coordinator, "project_dir", None)
+        if root:
+            try:
+                self._alignment_report = cached_alignment_report(self._project, self.coordinator.settings, root, self._alignment_options())
+            except (OSError, ValueError) as error:
+                self._log("配音时长检查：" + str(error))
+        actionable = [issue for issue in issues if issue.get("code") != "REVIEW_RECOMMENDED"]
+        actionable += self._alignment_report.get("issues", [])
+        self._problem_issues = enriched_issues(self._project, actionable)
+        for issue in self._problem_issues:
             icon = "●" if issue.get("severity") == "error" else "○"
-            item = QListWidgetItem(f"{icon} {issue.get('message', '')}\n{issue.get('code', '')} · {issue.get('entity_id', '')}")
+            item = QListWidgetItem(f"{icon} {issue.get('location', '')} · {issue.get('title', '')}\n{issue.get('message', '')}")
             item.setData(Qt.ItemDataRole.UserRole, issue)
+            item.setToolTip(issue.get("context", "") + "\n点击“处理选中问题”，或双击此项。")
             item.setForeground(QColor("#a45440" if issue.get("severity") == "error" else "#8b733b"))
             self.issues.addItem(item)
-        if not issues:
+            if issue.get("code") == "TTS_TOO_LONG":
+                copy_item = QListWidgetItem(f"{issue['location']} · 配音 {issue['speech_ms']/1000:.2f} 秒 / 可用 {issue['available_ms']/1000:.2f} 秒\n{issue.get('context', '')}")
+                copy_item.setData(Qt.ItemDataRole.UserRole, issue)
+                copy_item.setToolTip(issue["message"])
+                self.dub_issues.addItem(copy_item)
+        count = len(self._problem_issues)
+        self.review_problems_button.setText(f"问题清单（{count}）")
+        self.review_problems_button.setEnabled(bool(count))
+        self.preserve_formulas_button.setEnabled(bool(preservable_formula_ids(self._project, root)) and not self._view_busy)
+        obsolete = obsolete_rule_formula_ids(self._project)
+        self.repair_formulas_button.setVisible(bool(obsolete))
+        self.repair_formulas_button.setText(f"清除旧版误识别的公式（{len(obsolete)} 项）")
+        self.repair_formulas_button.setEnabled(not self._view_busy)
+        pending = sum(issue.get("code") == "REVIEW_RECOMMENDED" for issue in issues)
+        if pending:
+            self.issues.addItem(f"○ {pending} 句尚未人工确认。可抽查或批量确认，不要求逐句点击；这项不阻止导出。")
+        if not self._problem_issues:
             self.issues.addItem("当前数据检查未发现阻断问题；媒体产物将在导出时验证。")
+        problems = self.dub_issues.count()
+        measured = self._alignment_report.get("measured_count", 0)
+        missing = self._alignment_report.get("missing_count", 0)
+        if measured:
+            self.dub_status.setText(f"已检查 {measured} 句缓存配音，{problems} 句仍放不下；已利用可用停顿。" + (f"另有 {missing} 句需生成新配音。" if missing else "") + " 可先自动整理分段，再重新生成。")
+        if not problems:
+            self.dub_issues.addItem("暂无已知时长问题。新合成的配音会在生成时重新测量。")
+        else:
+            self.dub_issues.setCurrentRow(0)
+        self.repair_dub_button.setEnabled(bool(problems) and not self._view_busy)
+        groups = self._alignment_report.get("suggested_merges", [])
+        self.regroup_dub_button.setEnabled(bool(groups) and not self._view_busy)
+        self.regroup_dub_button.setText(f"自动整理配音分段（{len(groups)} 组）" if groups else "自动整理配音分段")
+        if self.issues.count():
+            self.issues.setCurrentRow(0)
 
     def _issue_clicked(self, item):
         issue = item.data(Qt.ItemDataRole.UserRole)
-        if issue and self._segment(issue.get("entity_id")):
-            self.filter.setChecked(False)
+        if issue:
+            self._navigate_issue(issue)
+
+    def _handle_selected_issue(self):
+        item = self.issues.currentItem()
+        if item:
+            self._issue_clicked(item)
+
+    def _navigate_issue(self, issue):
+        if not self._commit_all():
+            self._notify_unsaved_action()
+            return
+        identifier = issue.get("segment_id") or issue.get("entity_id")
+        self.filter.setChecked(False)
+        self.problem_filter.setChecked(False)
+        self.tabs.setCurrentIndex(1)
+        if self._segment(identifier):
+            self._select_segment(identifier)
+        if issue.get("action") == "formula":
+            self.advanced_toggle.setChecked(True)
+            for row in range(self.formula_list.count()):
+                if self.formula_list.item(row).data(Qt.ItemDataRole.UserRole) == issue.get("formula_id"):
+                    self.formula_list.setCurrentRow(row)
+                    self._edit_formula()
+                    break
+        elif issue.get("action") == "edit_tts":
+            self._repair_spoken(issue)
+        elif issue.get("action") == "edit_note":
+            self.tabs.setCurrentIndex(3)
+            self._load_note(issue.get("entity_id"))
+        else:
+            self.segment_fields["subtitle_plain"].setFocus()
+
+    def _show_review_problems(self):
+        self._reload_issues()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("问题清单 · 只处理需要注意的地方")
+        dialog.resize(850, 520)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label("不要求逐句确认全部字幕。选中问题点击处理，直接定位时间、原文与公式或配音读法。", "description"))
+        listing = QListWidget()
+        for issue in self._problem_issues:
+            item = QListWidgetItem(issue["location"] + " · " + issue["title"] + "\n" + issue["message"])
+            item.setData(Qt.ItemDataRole.UserRole, issue)
+            listing.addItem(item)
+        layout.addWidget(listing, 1)
+        def open_selected(*_):
+            item = listing.currentItem()
+            if item:
+                issue = item.data(Qt.ItemDataRole.UserRole)
+                dialog.accept()
+                self._navigate_issue(issue)
+        listing.itemDoubleClicked.connect(open_selected)
+        row = QHBoxLayout()
+        row.addWidget(button("处理选中问题", open_selected, True))
+        row.addWidget(button("关闭", dialog.reject))
+        layout.addLayout(row)
+        if listing.count():
+            listing.setCurrentRow(0)
+        dialog.exec()
+
+    def _repair_dub_item(self, item):
+        issue = item.data(Qt.ItemDataRole.UserRole)
+        if issue:
+            self._navigate_issue(issue)
+
+    def _repair_selected_dub(self):
+        item = self.dub_issues.currentItem()
+        if item:
+            self._repair_dub_item(item)
+
+    def _repair_spoken(self, issue):
+        identifier = issue.get("segment_id")
+        segment = self._segment(identifier)
+        if not segment:
+            return
+        segments = self._project["segments"]
+        index = segments.index(segment)
+        previous = segments[index - 1] if index else None
+        following = segments[index + 1] if index + 1 < len(segments) else None
+        dialog = SpokenTextDialog(segment, issue, previous=previous, following=following, replay=self._replay_segment, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            if dialog.action == "merge_previous" and previous:
+                identifier = self.coordinator.merge_segments(previous["id"], identifier)
+            elif dialog.action == "merge_next" and following:
+                identifier = self.coordinator.merge_segments(identifier, following["id"])
+            else:
+                text = dialog.spoken_text.toPlainText().strip()
+                if not text:
+                    raise ValueError("配音读法不能为空")
+                self.coordinator.update_segment(identifier, {"tts_text": text, "review": "needs_review"})
+            self._select_segment(identifier)
+            self._reload_issues()
+            self.review_edit_notice.setText("已保存配音修改。返回配音页重新生成，未改变的句子会复用缓存。")
+        except Exception as error:
+            self._show_error(str(error))
+
+    def _bulk_confirm(self):
+        if not self._commit_all():
+            return
+        try:
+            result = self.coordinator.bulk_confirm_segments()
+            self.review_edit_notice.setText(f"已一次确认 {result['confirmed']} 句；缺少译文的句子与公式仍需处理。可用 Ctrl+Z 撤销。")
+        except Exception as error:
+            self._show_error(str(error))
+
+    def _preserve_formulas(self):
+        if not self._commit_all():
+            return
+        try:
+            result = self.coordinator.preserve_pending_formulas()
+            self._reload_issues()
+            self.stage_label.setText(f"已为 {result['preserved']} 项保留原始证据；不代表候选公式已核对。可用 Ctrl+Z 撤销。")
+        except Exception as error:
+            self._show_error(str(error))
+
+    def _regroup_dub(self):
+        if not self._commit_all():
+            return
+        from mathbridge.application.issues import obsolete_rule_formula_ids
+        if obsolete_rule_formula_ids(self._project):
             self.tabs.setCurrentIndex(1)
-            self._select_segment(issue["entity_id"])
+            self.review_edit_notice.setText("这份旧项目含有误识别的公式。请先点击上方修复按钮，补译受影响的句子，再整理配音分段。")
+            return
+        self._reload_issues()
+        groups = self._alignment_report.get("suggested_merges", [])
+        if not groups:
+            return
+        try:
+            self.coordinator.bulk_merge_segments(groups)
+            self._reload_issues()
+            self.dub_status.setText(f"已整理 {len(groups)} 组相邻语句。请重新生成配音，程序会测量新时长；可用 Ctrl+Z 撤销。")
+        except Exception as error:
+            self._show_error(str(error))
+
+    def _repair_obsolete_formulas(self):
+        if not self._commit_all():
+            return
+        try:
+            result = self.coordinator.repair_obsolete_formulas()
+            self._reload_issues()
+            self.tabs.setCurrentIndex(1)
+            self.review_edit_notice.setText(f"已清除旧版误识别公式，受影响句子的译文已清空。点击“生成字幕译文”仅重新翻译这些缺失句子，其他译文保留。可撤销。")
+        except Exception as error:
+            self._show_error(str(error))
 
     def _busy(self, busy):
         self._view_busy = bool(busy)
@@ -1450,6 +1750,10 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(busy)
         self.create_button.setEnabled(not busy)
         self.import_subtitles_button.setEnabled(bool(self._project) and not busy)
+        self.preserve_formulas_button.setEnabled(bool(self._project) and not busy and any(f.get("review") == "needs_review" for f in (self._project or {}).get("formulas", [])))
+        self.repair_formulas_button.setEnabled(not busy)
+        self.repair_dub_button.setEnabled(self.dub_issues.count() > 0 and bool(self._problem_issues) and not busy)
+        self.regroup_dub_button.setEnabled(bool(self._alignment_report.get("suggested_merges")) and not busy)
         self._refresh_review_guidance()
         if not busy:
             self.progress_bar.setRange(0, 100)
@@ -1535,6 +1839,11 @@ class MainWindow(QMainWindow):
         self.stage_label.setText(f"{STAGES.get(stage, stage)}未完成 · {str(message)[:90]}")
         self._log(f"{stage}: {message}")
         self.log.show()
+        if stage in {"dub", "export", "preview"} and ("TTS_TOO_LONG" in message or "EXPORT_BLOCKED" in message):
+            self._reload_issues()
+            self.tabs.setCurrentIndex(2 if "TTS_TOO_LONG" in message else 4)
+            self.stage_label.setText("处理未完成 · 已列出问题句和时间，选中后点击处理")
+            return
         if stage in {"transcribe", "create", "diarize"}:
             self.review_edit_notice.setText(f"{STAGES.get(stage, stage)}未完成：{message}")
         if not self._closing_requested and "取消" not in message:
@@ -1590,7 +1899,7 @@ class MainWindow(QMainWindow):
 
     def _tab_changed(self, _index):
         self._commit_all()
-        if self.tabs.currentIndex() == 4:
+        if self.tabs.currentIndex() in (2, 4):
             self._refresh_issues()
 
     def _open_output(self, item):

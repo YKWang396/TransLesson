@@ -207,8 +207,8 @@ def main():
         coordinator.update_formula("formula-1", {"review": "needs_review"})
         refresh()
         assert window.review_guide_state["pending_formulas"] == 1
-        assert window.review_guide_state["action"] == "review"
-        window.review_next_button.click()
+        assert window.review_guide_state["action"] == "go_dub"
+        window._focus_formula_review()
         events()
         assert window.advanced_toggle.isChecked(), "Unresolved formula guidance must expose the relevant tools"
         assert window.formula_list.count() > 0

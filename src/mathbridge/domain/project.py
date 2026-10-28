@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import uuid
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 PLACEHOLDER = re.compile(r"\{\{([a-z][a-z0-9_-]{0,63})\}\}")
@@ -52,9 +53,14 @@ def _schema(name: str) -> dict:
     return json.loads((bundled if bundled.exists() else source).read_text(encoding="utf-8"))
 
 
-def validate_project(project: dict) -> None:
+@lru_cache(maxsize=1)
+def _project_validator():
     from jsonschema import Draft202012Validator
-    Draft202012Validator(_schema("project.schema.json")).validate(project)
+    return Draft202012Validator(_schema("project.schema.json"))
+
+
+def validate_project(project: dict) -> None:
+    _project_validator().validate(project)
     duration = project["source"]["duration_ms"]
     collections = {key: {item["id"]: item for item in project[key]}
                    for key in ("speakers", "segments", "formulas", "glossary", "notes")}
@@ -160,27 +166,44 @@ def export_issues(project: dict, formats=None) -> list[dict]:
         return issues
     if not project["segments"]:
         issue("EMPTY_TRANSCRIPT", "请先转写或导入字幕")
-    for segment in project["segments"]:
+    segments = sorted(project["segments"], key=lambda item: item["start_ms"])
+    segment_positions = {item["id"]: number for number, item in enumerate(segments, 1)}
+    formula_owners = {}
+    def position(segment):
+        ms = segment["start_ms"]
+        return f"第 {segment_positions[segment['id']]} 句（{ms // 60000:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}）"
+    for segment in segments:
+        for identifier in segment["formula_ids"]:
+            formula_owners.setdefault(identifier, segment)
         fields = ["target_text", "subtitle_plain"]
         if set(formats) & {"video", "wav"}:
             fields.append("tts_text")
         for field in fields:
             if not segment[field].strip():
-                issue("MISSING_TRANSLATION", f"{segment['id']} 缺少 {field}", segment["id"])
+                labels = {"target_text": "译文", "subtitle_plain": "目标字幕", "tts_text": "配音读法"}
+                issue("MISSING_TRANSLATION", f"{position(segment)}缺少{labels[field]}，请在校对页填写", segment["id"])
     if set(formats) & {"pdf", "video", "markdown"}:
         for formula in project["formulas"]:
             if formula["review"] == "needs_review":
-                issue("FORMULA_AMBIGUOUS", f"{formula['id']} 需确认公式或保留原始证据", formula["id"])
+                owner = formula_owners.get(formula["id"])
+                if owner:
+                    label = position(owner)
+                else:
+                    ms = formula["evidence"][0]["start_ms"]
+                    label = f"{ms // 60000:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}"
+                raw = formula["raw"].replace("\n", " ")
+                raw = raw[:65] + ("…" if len(raw) > 65 else "")
+                issue("FORMULA_AMBIGUOUS", f"{label}公式“{raw}”待核对：点击问题可定位并确认，或明确选择保留原始证据", formula["id"])
         for note in project["notes"]:
             if note["kind"] == "supplement":
                 issue("UNSUPPORTED_SUPPLEMENT", "首版不导出 AI 补充解释", note["id"])
-    for segment in project["segments"]:
+    for segment in segments:
         if segment["review"] == "needs_review":
-            issue("REVIEW_RECOMMENDED", f"{segment['id']} 译文尚未确认", segment["id"], "warning")
+            issue("REVIEW_RECOMMENDED", f"{position(segment)}译文尚未确认（不阻止试配音或字幕导出）", segment["id"], "warning")
     return issues
 
 
-def changed_copy(project: dict, collection: str, entity_id: str, changes: dict) -> dict:
+def changed_copy(project: dict, collection: str, entity_id: str, changes: dict, *, _validate=True) -> dict:
     candidate = copy.deepcopy(project)
     entity = next((x for x in candidate[collection] if x["id"] == entity_id), None)
     if entity is None:
@@ -189,5 +212,6 @@ def changed_copy(project: dict, collection: str, entity_id: str, changes: dict) 
         raise ValueError("不允许修改对象 ID")
     entity.update(changes)
     candidate["revision"] += 1
-    validate_project(candidate)
+    if _validate:
+        validate_project(candidate)
     return candidate

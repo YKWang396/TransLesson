@@ -123,6 +123,42 @@ def test_checkpoint_content_changes_invalidate(monkeypatch, lesson, tmp_path):
     assert result["usage"]["calls"] == 1
 
 
+def test_missing_only_repair_preserves_593_filled_unconfirmed_segments(monkeypatch, lesson):
+    template = copy.deepcopy(lesson["segments"][1])
+    template.update(review="needs_review", formula_ids=[], term_ids=[])
+    lesson["segments"] = [{**copy.deepcopy(template), "id": f"seg-{number}"} for number in range(1, 595)]
+    lesson["segments"][-1].update(target_text="", subtitle_plain="", tts_text="")
+    unchanged = copy.deepcopy(lesson["segments"][:-1])
+    reply = {"segments": [{"id": "seg-594", "target_text": "重新生成本句译文。",
+        "subtitle_plain": "重新生成本句译文。", "tts_text": "重新生成本句译文。"}], "formulas": [], "notes": []}
+    sent = _fake_opener(monkeypatch, [reply])
+    result = translate(lesson, {**_settings(), "_translation_missing_only": True})
+    assert len(sent) == 1
+    context = json.loads(sent[0]["messages"][1]["content"])
+    assert [item["id"] for item in context["segments"]] == ["seg-594"]
+    assert result["segments"][:-1] == unchanged
+    assert result["segments"][-1]["target_text"] == "重新生成本句译文。"
+    assert all(item["review"] == "needs_review" for item in result["segments"])
+    # A subsequent missing-only run has nothing to send, even though no human
+    # has confirmed any of these filled drafts.
+    sent.clear()
+    lesson["segments"] = result["segments"]
+    again = translate(lesson, {**_settings(), "_translation_missing_only": True})
+    assert sent == []
+    assert again["usage"]["calls"] == 0
+
+
+def test_missing_only_and_full_translation_do_not_share_checkpoint(monkeypatch, lesson, tmp_path):
+    lesson["segments"][0]["review"] = "needs_review"
+    sent = _fake_opener(monkeypatch, [_reply()])
+    settings = {**_settings(), "_project_dir": str(tmp_path)}
+    translate(lesson, settings)
+    result = translate(lesson, {**settings, "_translation_missing_only": True})
+    assert len(sent) == 1
+    assert result["usage"]["calls"] == 0
+    assert result["segments"] == lesson["segments"]
+
+
 def test_missing_placeholders_repaired_only_once(monkeypatch, lesson):
     lesson["segments"][0]["review"] = "needs_review"
     broken = _reply()

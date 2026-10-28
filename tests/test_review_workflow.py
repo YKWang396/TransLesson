@@ -37,22 +37,23 @@ def test_guide_offers_manual_or_configured_translation(lesson):
     settings = dict(text_provider="deepseek", model="test", api_key="test-key", allow_text_api=False)
     assert review_guidance(lesson, settings)["action"] == "configure_translation"
     settings["allow_text_api"] = True
-    assert review_guidance(lesson, settings)["action"] == "prepare_translation"
+    assert review_guidance(lesson, settings)["action"] == "translate_missing"
     local = dict(text_provider="offline", model="local", api_base="https://example.invalid/v1")
     assert review_guidance(lesson, local)["action"] == "configure_translation"
     local["api_base"] = "http://127.0.0.1:8080/v1"
-    assert review_guidance(lesson, local)["action"] == "prepare_translation"
+    assert review_guidance(lesson, local)["action"] == "translate_missing"
     local["api_base"] = "http://[broken"
     assert review_guidance(lesson, local)["action"] == "configure_translation"
 
 
-def test_guide_blocks_pending_math_and_unsaved_work(lesson):
+def test_guide_makes_sentence_confirmation_optional_and_calls_out_math(lesson):
     lesson["segments"][0]["review"] = "needs_review"
-    assert review_guidance(lesson, {})["action"] == "next_pending"
+    assert review_guidance(lesson, {})["action"] == "go_dub"
     lesson["segments"][0]["review"] = "confirmed"
     lesson["formulas"][0]["review"] = "needs_review"
     guide = review_guidance(lesson, {})
-    assert guide["action"] == "review" and guide["pending_formulas"] == 1
+    assert guide["action"] == "go_dub" and guide["pending_formulas"] == 1
+    assert "公式" in guide["description"]
     lesson["formulas"][0]["review"] = "confirmed"
     assert review_guidance(lesson, {})["action"] == "go_dub"
     assert not review_guidance(lesson, {}, busy=True)["enabled"]
@@ -133,3 +134,83 @@ def test_prepare_translation_runs_analysis_before_translation(lesson, monkeypatc
     coordinator.run_stage("prepare_translation")
     assert started == ["analyze"]
     assert coordinator._pipeline == ["translate"]
+
+
+def test_bulk_confirmation_saves_once_and_preserves_formula_review(lesson, tmp_path):
+    lesson["segments"][0]["review"] = "needs_review"
+    lesson["segments"][1].update(review="needs_review", tts_text="")
+    lesson["formulas"][0]["review"] = "needs_review"
+    coordinator = Coordinator()
+    coordinator.project, coordinator.project_dir = copy.deepcopy(lesson), tmp_path
+    result = coordinator.bulk_confirm_segments()
+    assert result == dict(confirmed=1, skipped=1)
+    assert coordinator.project["revision"] == lesson["revision"] + 1
+    assert coordinator.project["segments"][1]["review"] == "needs_review"
+    assert coordinator.project["formulas"] == lesson["formulas"]
+    assert len(list((tmp_path / "history").glob("*.json"))) == 1
+    assert coordinator.bulk_confirm_segments() == dict(confirmed=0, skipped=1)
+    assert coordinator.project["revision"] == lesson["revision"] + 1
+    coordinator.undo()
+    assert coordinator.project["segments"] == lesson["segments"]
+
+
+def test_merge_preserves_formula_evidence_and_note_references(lesson, tmp_path):
+    coordinator = Coordinator()
+    coordinator.project, coordinator.project_dir = copy.deepcopy(lesson), tmp_path
+    assert coordinator.merge_segments("seg-1", "seg-2") == "seg-1"
+    merged, = coordinator.project["segments"]
+    assert merged["start_ms"] == 1000 and merged["end_ms"] == 10500
+    assert merged["source_text"] == " ".join(segment["source_text"] for segment in lesson["segments"])
+    assert merged["tts_text"] == "".join(segment["tts_text"] for segment in lesson["segments"])
+    assert merged["formula_ids"] == ["formula-1"] and merged["term_ids"] == ["term-derivative"]
+    assert merged["review"] == "needs_review"
+    assert coordinator.project["formulas"] == lesson["formulas"]
+    assert coordinator.project["notes"][0]["segment_ids"] == ["seg-1"]
+    assert coordinator.project["revision"] == lesson["revision"] + 1
+    validate_project(coordinator.project)
+    coordinator.undo()
+    assert coordinator.project["segments"] == lesson["segments"]
+
+
+def test_bulk_merge_rejects_cross_speaker_duplicate_and_reversed_groups(lesson, tmp_path):
+    coordinator = Coordinator()
+    coordinator.project, coordinator.project_dir = copy.deepcopy(lesson), tmp_path
+    for groups in ([["seg-2", "seg-1"]], [["seg-1", "seg-2"], ["seg-1", "seg-2"]]):
+        with pytest.raises(ValueError):
+            coordinator.bulk_merge_segments(groups)
+    assert coordinator.project == lesson
+    coordinator.project["segments"][1]["speaker_id"] = "other"
+    with pytest.raises(ValueError, match="说话人"):
+        coordinator.merge_segments("seg-1", "seg-2")
+
+
+def test_repair_obsolete_formula_clears_only_affected_translation(lesson, tmp_path):
+    import hashlib
+    identifier = "formula-" + hashlib.sha256(b"seg-1\0e x").hexdigest()[:16]
+    formula = lesson["formulas"][0]
+    formula.update(id=identifier, raw="e x", latex="e^x", review="needs_review", warnings=["RULE_CANDIDATE_REQUIRES_REVIEW"])
+    lesson["segments"][0].update(source_text="Take x to solve it.", formula_ids=[identifier], target_text="取 {{" + identifier + "}}。")
+    lesson["notes"][0].update(formula_ids=[identifier], body="课程给出 {{" + identifier + "}}。")
+    coordinator = Coordinator()
+    coordinator.project, coordinator.project_dir = copy.deepcopy(lesson), tmp_path
+    assert review_guidance(lesson, {})["action"] == "repair_formulas"
+    result = coordinator.repair_obsolete_formulas()
+    assert result == dict(removed=1, affected=1, segment_ids=["seg-1"])
+    assert coordinator.project["formulas"] == []
+    assert coordinator.project["segments"][1] == lesson["segments"][1]
+    assert coordinator.project["segments"][0]["source_text"] == "Take x to solve it."
+    assert all(not coordinator.project["segments"][0][field] for field in ("target_text", "subtitle_plain", "tts_text"))
+    assert "{{" not in coordinator.project["notes"][0]["body"]
+    validate_project(coordinator.project)
+    coordinator.undo()
+    assert coordinator.project["formulas"] == lesson["formulas"]
+
+
+def test_translate_missing_does_not_rerun_analysis(lesson, monkeypatch):
+    coordinator = Coordinator()
+    coordinator.project = lesson
+    started = []
+    monkeypatch.setattr(coordinator, "_start", lambda stage, options: started.append((stage, options)))
+    coordinator.run_stage("translate_missing")
+    assert started == [("translate", {"missing_only": True})]
+    assert coordinator._pipeline == []

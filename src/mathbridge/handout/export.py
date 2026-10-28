@@ -84,7 +84,7 @@ def _render_formulas(formulas, destination):
     from PySide6.QtGui import QImage, QPainter
     from PySide6.QtSvg import QSvgRenderer
 
-    selected = [f for f in formulas if f.get("latex")]
+    selected = [f for f in formulas if f.get("latex") and f.get("review") != "preserve_source"]
     if not selected:
         return {}
     helper = Path(__file__).with_name("render_math.cjs")
@@ -231,7 +231,7 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
                 parts.append(Image(str(path), width=width, height=height, hAlign="CENTER"))
                 parts.append(Spacer(1, 7))
             elif formula["review"] == "preserve_source":
-                parts.append(paragraph("未识别公式：请以原始画面或听写为准。", "body"))
+                parts.append(paragraph("保留原始表达（未确认公式含义）：" + formula["raw"], "body"))
             else:
                 parts.append(paragraph("公式尚未识别，待校对：" + formula["raw"]))
             if formula["review"] == "preserve_source":
@@ -248,6 +248,12 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
             return KeepTogether(parts)
 
         if project.get("notes"):
+            def markdown_formula(match):
+                formula = maps["formulas"][match[1]]
+                if formula["review"] == "preserve_source":
+                    evidence = "；".join(_timestamp(item["start_ms"]) + "-" + _timestamp(item["end_ms"]) for item in formula["evidence"])
+                    return "【原始表达，未确认：" + formula["raw"] + "；来源 " + evidence + "】"
+                return "$" + (formula.get("latex") or formula["raw"]) + "$"
             for note in project["notes"]:
                 label = " [补充解释，非原课内容]" if note["kind"] == "supplement" else ""
                 story.append(paragraph(note["heading"] + label, "heading"))
@@ -260,7 +266,7 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
                     story.append(formula_flow(fid))
                 references = [f"{sid} {_timestamp(maps['segments'][sid]['start_ms'])}-{_timestamp(maps['segments'][sid]['end_ms'])}" for sid in note["segment_ids"]]
                 story.append(paragraph("课程来源：" + ("；".join(references) or "引用公式的证据时间"), "caption"))
-                markdown.extend([f"## {note['heading']}{label}", "", _TOKEN.sub(lambda m: "$" + (maps["formulas"][m[1]].get("latex") or maps["formulas"][m[1]]["raw"]) + "$", note["body"]), "", "来源：" + "；".join(references), ""])
+                markdown.extend([f"## {note['heading']}{label}", "", _TOKEN.sub(markdown_formula, note["body"]), "", "来源：" + "；".join(references), ""])
         else:
             story.extend([paragraph("逐段证据索引", "heading"), paragraph("尚未生成结构化讲义。以下为课程片段索引，供整理与校对使用。", "caption")])
             markdown.extend(["## 逐段证据索引", "", "尚未生成结构化讲义。", ""])
@@ -273,6 +279,10 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
                 story.append(paragraph("公式候选与证据", "heading"))
                 for fid in maps["formulas"]:
                     story.append(formula_flow(fid))
+                    formula = maps["formulas"][fid]
+                    if formula["review"] == "preserve_source":
+                        markdown.extend(["原始表达（未确认）：" + formula["raw"], "来源：" + "；".join(
+                            _timestamp(item["start_ms"]) + "-" + _timestamp(item["end_ms"]) for item in formula["evidence"]), ""])
         if project.get("glossary"):
             story.append(paragraph("课程术语表", "heading"))
             markdown.extend(["## 课程术语表", ""])

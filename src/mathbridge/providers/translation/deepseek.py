@@ -114,6 +114,8 @@ def translate(project: dict, settings: dict, cancel=None, progress=None) -> dict
 
     A failed request raises with usage including conservative uncertain reservations.
     Completed batches can be persisted via settings['checkpoint'](result).
+    _translation_missing_only limits repair runs to incomplete derived text,
+    preserving filled drafts without falsely marking them as human confirmed.
     """
     local = settings.get("provider") == "llama_cpp" or settings.get("text_provider") == "offline"
     base = settings.get("api_base", "http://127.0.0.1:8080/v1" if local else "https://api.deepseek.com").rstrip("/")
@@ -188,6 +190,7 @@ def translate(project: dict, settings: dict, cancel=None, progress=None) -> dict
         "glossary": project["glossary"], "notes": project["notes"], "model": model,
         "api_base": base, "provider": "local" if local else "remote",
         "max_tokens": max_tokens, "batch_size": batch_size,
+        "missing_only": bool(settings.get("_translation_missing_only")),
         "day": dt.datetime.now(dt.timezone.utc).date().isoformat(),
         "prompt_version": PROMPT_VERSION}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     completed_ids = []
@@ -231,7 +234,9 @@ def translate(project: dict, settings: dict, cancel=None, progress=None) -> dict
                 usage["checkpoint_rejected"] = True
     formula_map = {f["id"]: f for f in result["formulas"]}
     glossary = {t["id"]: t for t in result["glossary"]}
-    pending = [s for s in result["segments"] if s.get("review") != "confirmed" and s["id"] not in completed_ids]
+    pending = [s for s in result["segments"] if s.get("review") != "confirmed" and s["id"] not in completed_ids
+               and (not settings.get("_translation_missing_only") or any(
+                   not s.get(field, "").strip() for field in ("target_text", "subtitle_plain", "tts_text")))]
     if not pending:
         return result
     endpoint = base if base.endswith("/chat/completions") else base + "/chat/completions"
