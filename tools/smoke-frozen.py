@@ -1,10 +1,13 @@
 """Check the portable package without developer Python/Node/FFmpeg on PATH."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 import uuid
+import argparse
+import copy
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -12,7 +15,16 @@ from mathbridge.storage.project_store import ProjectStore
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--https', action='store_true', help='Also check real HTTPS with an intentionally invalid API key (expects HTTP 401/403).')
+    args = parser.parse_args()
     bundle = ROOT / 'dist/MathBridge'
+    ssl_policy = Path(sys.base_prefix) / 'Lib' / 'codex-rejected-cas.pem'
+    if ssl_policy.is_file():
+        assert (bundle/'_internal'/ssl_policy.name).read_bytes() == ssl_policy.read_bytes(), 'Missing Python TLS policy'
+    for name in ('libssl-3-x64.dll','libcrypto-3-x64.dll'):
+        assert hashlib.sha256((bundle/'_internal'/name).read_bytes()).digest() == hashlib.sha256(
+            (Path(sys.base_prefix)/'DLLs'/name).read_bytes()).digest(), 'Mismatched Python TLS dependency: '+name
     report = json.loads((ROOT / 'artifacts/pipeline-report.json').read_text(encoding='utf-8'))
     project_dir = Path(report['results'][0]['outputs'][0]).parents[2]
     store = ProjectStore(project_dir)
@@ -24,6 +36,26 @@ def main():
     environment['PYTHONIOENCODING'] = 'utf-8'
     environment['PYTHONUTF8'] = '1'
     environment.pop('PYTHONPATH', None)
+    if args.https:
+        probe = copy.deepcopy(project)
+        probe['segments'] = probe['segments'][:1]
+        probe['notes'] = []; probe['formulas'] = []; probe['glossary'] = []
+        probe['segments'][0].update(source_text='Two plus three equals five.', target_text='',
+                                    subtitle_plain='', tts_text='', formula_ids=[], term_ids=[])
+        probe_dir = ROOT/'tmp'/('frozen-https-'+uuid.uuid4().hex[:10])
+        ProjectStore(probe_dir).save(probe)
+        command = dict(type='command', stage='translate', request_id='req-https-'+uuid.uuid4().hex,
+                       project_dir=str(probe_dir), project=probe, project_revision=probe['revision'],
+                       source_path='', options={}, settings=dict(text_provider='deepseek', model='deepseek-flash',
+                       api_base='https://api.deepseek.com', api_key='invalid-key-for-tls-smoke', allow_text_api=True,
+                       budget_cny=1, max_calls=3, input_price_per_million=2, output_price_per_million=8))
+        result = subprocess.run([str(bundle/'mathbridge-worker.exe'), '--worker'],
+                                input=json.dumps(command)+'\n', text=True, encoding='utf-8',
+                                capture_output=True, env=environment, cwd=bundle, timeout=30)
+        done = next((json.loads(line) for line in result.stdout.splitlines()
+                     if line.strip() and json.loads(line).get('type')=='done'), {})
+        assert 'API_AUTH_FAILED' in done.get('message',''), (done, result.stderr)
+        print('PASS: frozen HTTPS reached API authentication; no valid key used')
     screenshot = ROOT / 'artifacts/ui-portable.png'
     subprocess.run([str(bundle / 'MathBridge.exe'), str(project_dir), '--smoke-test', '--screenshot', str(screenshot)],
                    env=environment, cwd=bundle, timeout=30, check=True)

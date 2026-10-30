@@ -156,12 +156,14 @@ class TextClient:
                             continue
                     persist_ledger()
                     raise TranslationError("PROVIDER_HTTP_ERROR", f"API HTTP {exc.code}；检查 endpoint 和模型能力", usage) from None
-                except (TimeoutError, urllib.error.URLError, OSError):
+                except (TimeoutError, urllib.error.URLError, OSError) as exc:
                     usage["uncertain_requests"] += 1
                     usage["uncertain_cost_cny"] += reserve
                     persist_ledger()
                     # A timed-out POST may already be charged; no silent repeat.
-                    raise TranslationError("PROVIDER_TIMEOUT", "请求未得到响应，可能已计费；请查看 usage 后手动重试", usage) from None
+                    reason = getattr(exc, "reason", exc)
+                    detail = type(reason).__name__ + ": " + str(reason)[:240]
+                    raise TranslationError("PROVIDER_TIMEOUT", "API 连接未完成（" + detail + "），可能已计费；完成的批次已保留", usage) from None
                 except (KeyError, ValueError, TypeError):
                     if not accounted:
                         usage["uncertain_requests"] += 1

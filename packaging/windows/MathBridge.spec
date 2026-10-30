@@ -1,6 +1,7 @@
 # Build from project root with: .venv/Scripts/python.exe -m PyInstaller packaging/windows/MathBridge.spec
 import os
 import shutil
+import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
 
@@ -18,6 +19,11 @@ datas = [
     (str((handout / 'node_modules/mathjax-full/package.json').resolve()), 'mathbridge/handout/node_modules/mathjax-full'),
     (str((handout / 'node_modules/mathjax-full/LICENSE').resolve()), 'mathbridge/handout/node_modules/mathjax-full'),
 ]
+# Some Python distributions load an adjacent CA policy file whenever an SSL
+# context is created. Preserve that runtime dependency in the frozen ssl path.
+ssl_policy = Path(sys.base_prefix) / 'Lib' / 'codex-rejected-cas.pem'
+if ssl_policy.is_file():
+    datas.append((str(ssl_policy), '.'))
 for package in ('imageio_ffmpeg', 'faster_whisper', 'sherpa_onnx', 'reportlab', 'jsonschema', 'jsonschema_specifications'):
     datas += collect_data_files(package)
     datas += copy_metadata(package.replace('_', '-'))
@@ -39,6 +45,15 @@ a.binaries = [entry for entry in a.binaries
               if Path(entry[0]).name.lower() != 'icuuc.dll'
               and not Path(entry[0]).name.lower().startswith('api-ms-')
               and not Path(entry[0]).name.lower().startswith('icudt78')]
+# Keep Python's OpenSSL pair together. A Poppler installation on the build
+# PATH can expose older same-named DLLs that break frozen HTTPS connections.
+openssl = {name: Path(sys.base_prefix) / 'DLLs' / name
+           for name in ('libssl-3-x64.dll', 'libcrypto-3-x64.dll')}
+for name, path in openssl.items():
+    if not path.is_file():
+        raise RuntimeError('Python OpenSSL dependency missing: ' + name)
+a.binaries = [(entry[0], str(openssl[Path(entry[0]).name.lower()]), entry[2])
+              if Path(entry[0]).name.lower() in openssl else entry for entry in a.binaries]
 pyz = PYZ(a.pure)
 gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name='MathBridge', debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=False)

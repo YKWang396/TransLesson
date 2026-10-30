@@ -1,5 +1,9 @@
 # 0.1 本机工程验证记录
 
+## 2026-10-30：0.1.4 便携版真实 HTTPS 修复
+
+最终打包检查发现 Python 发行版的 SSLContext 依赖邻近的证书策略文件；打包遗漏它会产生 FileNotFoundError，源码调用不受影响。现保留该策略文件并固定 Python 配套 OpenSSL DLL，未关闭证书校验。195 项回归测试通过。隔离开发工具 PATH 的便携 worker 对真实 DeepSeek Flash 发起 2 次请求，在 39 段课程节选上生成 8 节讲义及 PDF；返回实际 usage，估算费用 ¥0.02044。`tools/smoke-frozen.py --https` 使用无效测试 Key 检查 HTTPS 能到达 API 身份验证，不读取或传递真实 Key。
+
 ## 2026-10-30：0.1.3 AI 课程工作流
 
 完整回归测试 195 passed；真实 DeepSeek Flash API 在独立课程副本完成 AI 断句（4,986 词全部保留）、407 段译文与 12 节教学讲义。5 页 PDF 已逐页渲染检查，负号和数学字符字体已修复。原项目未修改。详细范围见 [本次验证记录与使用说明](13-ai-course-workflow.md)。UI 项目切换、预算简化及合成短片的双向 TTS/PDF/MP4 导出检查通过。
