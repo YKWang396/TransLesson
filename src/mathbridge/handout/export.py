@@ -354,13 +354,13 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
             canvas.line(23 * mm, 19 * mm, A4[0] - 23 * mm, 19 * mm)
             canvas.setFont(font, 9)
             canvas.setFillColor(colors.HexColor("#536570"))
-            canvas.drawString(23 * mm, 14 * mm, f"MathBridge · revision {project['revision']}")
+            canvas.drawString(23 * mm, 14 * mm, f"课译TransLesson · 第 {project['revision']} 版")
             canvas.drawRightString(A4[0] - 23 * mm, 14 * mm, str(doc.page))
             canvas.restoreState()
         target = temporary / "handout.pdf"
         SimpleDocTemplate(str(target), pagesize=A4, rightMargin=23 * mm, leftMargin=23 * mm,
                           topMargin=20 * mm, bottomMargin=26 * mm,
-                          title=project["title"], author="MathBridge", allowSplitting=True).build(
+                          title=project["title"], author="课译TransLesson", allowSplitting=True).build(
                               story, onFirstPage=page_footer, onLaterPages=page_footer)
         # Preserve standalone glyph SVG and LaTeX for later repagination.
         assets = output_pdf.with_name(output_pdf.stem + "-formulas")

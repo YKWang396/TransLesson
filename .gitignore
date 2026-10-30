@@ -27,3 +27,6 @@ dist/
 *.egg-info/
 artifacts/
 /课译 TransLesson.exe
+/课译TransLesson.exe
+components/GPT-SoVITS/
+components/faster-whisper-small/

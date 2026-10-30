@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mathbridge"
-version = "0.1.8"
-description = "Local mathematics lecture translation and review desktop"
+version = "0.1.9"
+description = "Course translation workspace"
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "PySide6-Essentials>=6.8,<6.13",
@@ -28,7 +28,7 @@ mathbridge = "mathbridge.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mathbridge = ["schemas/*.json", "handout/*.cjs", "handout/*.json"]
+mathbridge = ["schemas/*.json", "handout/*.cjs", "handout/*.json", "resources/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

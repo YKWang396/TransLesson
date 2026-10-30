@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication
 
 
@@ -15,7 +15,7 @@ def main(argv=None):
     if "--worker" in arguments:
         from mathbridge.worker.__main__ import main as worker_main
         return worker_main()
-    parser = argparse.ArgumentParser(description="课译 TransLesson · 本地数学课程翻译工作台")
+    parser = argparse.ArgumentParser(description="课译TransLesson · 课程翻译工作台")
     parser.add_argument("project", nargs="?", help="要打开的项目目录")
     parser.add_argument("--smoke-test", action="store_true", help="启动并检查原生界面后退出")
     parser.add_argument("--screenshot", help="启动后保存一张窗口截图")
@@ -24,7 +24,9 @@ def main(argv=None):
     app.setOrganizationName("MathBridge")
     app.setApplicationName("MathBridge")
     # Retain the storage identity so existing preferences and credentials work.
-    app.setApplicationDisplayName("课译 TransLesson")
+    from mathbridge.branding import APP_NAME,APP_ICON
+    app.setApplicationDisplayName(APP_NAME)
+    app.setWindowIcon(QIcon(str(APP_ICON)))
     from mathbridge import __version__
     app.setApplicationVersion(__version__)
     app.setStyle("Fusion")

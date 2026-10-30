@@ -57,7 +57,7 @@ def main():
         assert 'API_AUTH_FAILED' in done.get('message',''), (done, result.stderr)
         print('PASS: frozen HTTPS reached API authentication; no valid key used')
     screenshot = ROOT / 'artifacts/ui-portable.png'
-    subprocess.run([str(bundle / '课译 TransLesson.exe'), str(project_dir), '--smoke-test', '--screenshot', str(screenshot)],
+    subprocess.run([str(bundle / '课译TransLesson.exe'), str(project_dir), '--smoke-test', '--screenshot', str(screenshot)],
                    env=environment, cwd=bundle, timeout=30, check=True)
     assert screenshot.is_file() and screenshot.stat().st_size > 5000
     results = []

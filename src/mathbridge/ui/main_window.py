@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QSettings, QStandardPaths
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPixmap, QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -20,6 +20,8 @@ from .settings import SettingsDialog, load_settings, save_settings
 from .review_workflow import review_guidance
 from .issue_dialogs import SpokenTextDialog, DubbingReviewDialog
 from .theme import STYLESHEET
+from mathbridge.branding import APP_NAME,APP_PURPOSE,APP_ICON,APP_LOGO
+from .voice_service import LocalVoiceService
 
 
 STAGES = {"create": "建立项目", "transcribe": "识别课程原文", "diarize": "区分说话人", "sentences": "AI 整理句意与断句", "analyze": "检查数学表达", "translate": "AI 翻译", "prepare_translation": "AI 断句并翻译", "dub": "生成配音", "speaker_reference": "提取参考原声", "notes": "AI 整理教学讲义", "export": "导出", "frame": "提取当前帧", "preview": "生成预览", "pipeline": "自动处理草稿", "import_subtitles": "导入字幕"}
@@ -94,7 +96,9 @@ class MainWindow(QMainWindow):
         self._note_timer.setSingleShot(True)
         self._note_timer.setInterval(650)
         self._note_timer.timeout.connect(self._commit_note)
-        self.setWindowTitle("课译 TransLesson · 数学课程翻译工作台")
+        self.voice_service=LocalVoiceService(self)
+        self.setWindowTitle(APP_NAME+" · "+APP_PURPOSE)
+        self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1480, 940)
         self.setMinimumSize(1120, 760)
         self.setStyleSheet(STYLESHEET)
@@ -104,6 +108,9 @@ class MainWindow(QMainWindow):
         self._refresh_project(None)
         if self._credential_error:
             self._log(self._credential_error)
+        self.voice_service.changed.connect(self._voice_service_changed)
+        self.voice_service.busyChanged.connect(self._voice_service_busy)
+        QTimer.singleShot(400,lambda:self.voice_service.check(self.coordinator.settings))
 
     def _build(self):
         root = QWidget()
@@ -112,10 +119,12 @@ class MainWindow(QMainWindow):
         outer.setSpacing(12)
         self.setCentralWidget(root)
         header = QHBoxLayout()
+        logo=QLabel();logo.setPixmap(QPixmap(str(APP_LOGO)).scaled(48,48,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
+        logo.setFixedSize(52,52);header.addWidget(logo)
         title = QVBoxLayout()
         title.setSpacing(1)
-        title.addWidget(label("课译 TransLesson", "brand"))
-        title.addWidget(label("数学课程 · 翻译与证据校对", "eyebrow"))
+        title.addWidget(label(APP_NAME, "brand"))
+        title.addWidget(label(APP_PURPOSE, "eyebrow"))
         header.addLayout(title)
         header.addStretch()
         self.project_title = label("尚未打开项目")
@@ -141,7 +150,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._export_page(), "05  导出")
         outer.addWidget(self.tabs, 1)
         footer = QHBoxLayout()
-        self.stage_label = label("准备就绪 · 从一个课程视频开始")
+        self.stage_label = label("准备就绪")
         footer.addWidget(self.stage_label, 1)
         self.count_label = label("")
         self.count_label.setWordWrap(False)
@@ -196,8 +205,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(24)
         left = QVBoxLayout()
         left.addSpacing(15)
-        left.addWidget(label("把数学课，带到另一种语言。", "pageTitle"))
-        left.addWidget(label("AI 自动断句、翻译并整理教学讲义，修改自动保存在当前项目中。", "description"))
+        left.addWidget(label("课程项目", "pageTitle"))
         self.current_project_box = QGroupBox("当前项目 · 已恢复工作进度")
         current = QVBoxLayout(self.current_project_box)
         self.current_project_details = label("", "description")
@@ -245,27 +253,24 @@ class MainWindow(QMainWindow):
         self.import_subtitles_button = button("导入 SRT / VTT 转写", self._import_subtitles)
         existing.addWidget(self.import_subtitles_button)
         left.addLayout(existing)
-        left.addWidget(label("打开已有项目即可继续，无需重选媒体或保存目录。成品默认保存到项目的 exports 文件夹，导出时可另存。", "description"))
         left.addStretch()
         layout.addLayout(left, 3)
         right = QVBoxLayout()
-        guide = QGroupBox("从原课到可发布材料")
+        guide = QGroupBox("处理流程")
         steps = QVBoxLayout(guide)
         for n, title, desc in [
-            ("1", "转写与证据", "本地 Whisper 识别，或导入已有字幕。"),
+            ("1", "识别原文", "Whisper 识别或导入字幕"),
             ("2", "AI 断句并翻译", "连贯理解上下文，合并碎句、合理拆分长句；无需逐句填写。"),
-            ("3", "标准配音与试听", "系统声音合成，检查语速和片段时长。"),
+            ("3", "生成配音", "系统声音或参考原声音色"),
             ("4", "AI 教学讲义与导出", "按知识点整理定义、推导、例题与小结，保留课程来源。"),
         ]:
             steps.addWidget(label(f"{n}   {title}"))
-            steps.addWidget(label(desc, "description"))
-            steps.addSpacing(12)
+            steps.addSpacing(6)
         right.addWidget(guide)
         self.capabilities = label("", "notice")
         right.addWidget(self.capabilities)
         self.pipeline_button = self._stage_button("开始自动处理草稿", "pipeline", True)
         right.addWidget(self.pipeline_button)
-        right.addWidget(label("使用 API 前请在“处理设置”选择提供程序，并明确授权课程文本上传。", "description"))
         right.addStretch()
         layout.addLayout(right, 2)
         return page
@@ -518,8 +523,7 @@ class MainWindow(QMainWindow):
     def _dub_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.addWidget(label("让译文，回到原课的时间线上。", "pageTitle"))
-        layout.addWidget(label("分析原声停顿 → 自然生成译声 → 测量时长 → 自动调整停顿和局部语速。先自动处理，再抽查剩余问题。", "description"))
+        layout.addWidget(label("课程配音", "pageTitle"))
         row=QHBoxLayout()
         self.generate_dub_button=self._stage_button("自动生成并匹配配音","dub",True)
         row.addWidget(self.generate_dub_button)
@@ -527,7 +531,12 @@ class MainWindow(QMainWindow):
         self.listen_dub_button.setEnabled(False);row.addWidget(self.listen_dub_button)
         self.dub_review_button=button("集中试听 / 抽查",self._show_dub_review)
         row.addWidget(self.dub_review_button);row.addStretch();layout.addLayout(row)
-        self.dub_status=label("点击自动生成并匹配配音；已有自然配音会复用，字幕和讲义不变。","notice")
+        service_row=QHBoxLayout()
+        self.voice_service_button=button("启动声音服务",lambda:self.voice_service.start(self.coordinator.settings))
+        service_row.addWidget(self.voice_service_button)
+        self.voice_service_status=label(self.voice_service.message,"description")
+        service_row.addWidget(self.voice_service_status,1);layout.addLayout(service_row)
+        self.dub_status=label("生成后可集中试听，检查时长与音色。","notice")
         layout.addWidget(self.dub_status)
         advanced=QCheckBox("高级：声音、语速与时间限制（通常无需修改）")
         layout.addWidget(advanced)
@@ -580,8 +589,7 @@ class MainWindow(QMainWindow):
             speakers_row.addWidget(control)
         speakers_row.addStretch()
         layout.addLayout(speakers_row)
-        layout.addWidget(label("可在校对页为每段指定说话人。原声音色需 3–10 秒单人清晰参考原声及本机 GPT-SoVITS 服务；多人同时讲话暂需人工校对，声音相似度需试听确认。", "description"))
-        layout.addWidget(label("自动处理后的剩余问题 · 可对比原声、自然译声和调整后译声", "description"))
+        layout.addWidget(label("选择说话人配置声音；多人片段可在校对页分配。", "description"))
         self.dub_issues = QListWidget()
         self.dub_issues.setWordWrap(True)
         self.dub_issues.setMinimumHeight(90)
@@ -615,7 +623,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         header = QHBoxLayout()
-        header.addWidget(label("有出处的课程讲义", "pageTitle"), 1)
+        header.addWidget(label("课程讲义", "pageTitle"), 1)
         header.addWidget(self._stage_button("AI 生成 / 重新整理教学讲义", "notes", True))
         layout.addLayout(header)
         layout.addWidget(label("AI 按知识点组织学习概览、定义、推导、课堂例题与小结，合并重复内容。重新生成会替换当前讲义，可撤销；双击来源可回听原课。", "description"))
@@ -650,8 +658,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QHBoxLayout(page)
         left = QVBoxLayout()
-        left.addWidget(label("课程的下一站", "pageTitle"))
-        left.addWidget(label("检查问题，选择音轨策略，再从当前 revision 导出。", "description"))
+        left.addWidget(label("导出课程", "pageTitle"))
         group = QGroupBox("导出内容")
         formats = QGridLayout(group)
         self.format_checks = {}
@@ -669,7 +676,6 @@ class MainWindow(QMainWindow):
         self.background.addItem("保留原声，只加字幕", "original")
         self.background.addItem("低音量原声 + 译声（双语旁白）", "quiet_original")
         form.addRow("音轨策略", self.background)
-        form.addRow(label("混合原声会包含教师人声，此处不提供未经验证的干净背景声分离。", "description"))
         self.export_directory = QLineEdit()
         self.export_directory.setPlaceholderText("留空：项目内 exports 文件夹")
         row = QHBoxLayout()
@@ -939,7 +945,7 @@ class MainWindow(QMainWindow):
             self._show_error(str(error))
 
     def _open_project(self):
-        path = QFileDialog.getExistingDirectory(self, "打开课译 TransLesson 项目目录")
+        path = QFileDialog.getExistingDirectory(self, "打开课译TransLesson 项目目录")
         if path:
             self._call("open_project", path)
 
@@ -982,7 +988,7 @@ class MainWindow(QMainWindow):
             self._call("relink_source", path)
 
     def _settings(self, tab_index=None):
-        dialog = SettingsDialog(self.coordinator.settings, self)
+        dialog = SettingsDialog(self.coordinator.settings, self,service_manager=self.voice_service)
         if isinstance(tab_index, int) and not isinstance(tab_index, bool):
             tabs = dialog.findChild(QTabWidget)
             if tabs:
@@ -1003,6 +1009,15 @@ class MainWindow(QMainWindow):
             save_settings(values)
             self._update_capabilities()
             self._reload_issues()
+            self.voice_service.check(self.coordinator.settings)
+
+    def _voice_service_changed(self,status,message):
+        self.voice_service_status.setText(message)
+        self.voice_service_button.setEnabled(status not in ('ready','starting','stopping'))
+        self.voice_service_button.setText('声音服务已就绪' if status=='ready' else '正在启动…' if status=='starting' else '启动声音服务')
+
+    def _voice_service_busy(self,busy):
+        self.voice_service_button.setEnabled(not busy and self.voice_service.status not in ('ready','starting'))
 
     def _refresh_review_guidance(self):
         if not hasattr(self, "review_next_button"):
@@ -1161,7 +1176,8 @@ class MainWindow(QMainWindow):
         provider = {"manual": "手动校对", "deepseek": "DeepSeek API", "offline": "本地 llama.cpp"}.get(cfg.get("text_provider"), "手动校对")
         permission = "课程文本已授权上传" if cfg.get("allow_text_api") else "尚未授权课程文本上传"
         diarization = "自动流程已启用" if cfg.get("diarization_enabled") else "手动分配 / 按需区分"
-        self.capabilities.setText(f"识别：{model_state}\n说话人：{diarization}\n文本：{provider}\n隐私：{permission}\n参考音色：可配置本机 GPT-SoVITS")
+        self.capabilities.setText(f"识别：{model_state}\n文本：{provider}")
+        self.capabilities.setToolTip(f"说话人：{diarization}\n{permission}")
         self.voice_summary.setText(f"{cfg.get('voice') or '自动选择已安装的目标语言声音'} · 语速 {cfg.get('speech_rate', 0)}\n原声克隆服务：{cfg.get('voice_clone_api_url', 'http://127.0.0.1:9880')}")
         self._update_usage()
         self._refresh_review_guidance()
@@ -1238,9 +1254,10 @@ class MainWindow(QMainWindow):
             self._refresh_speakers()
         if project:
             self.project_title.setText(project.get("title", "课程项目"))
-            self.saved.setText(f"已保存 · revision {project.get('revision', '?')}")
+            self.saved.setText(f"已保存 · 第 {project.get('revision', '?')} 版")
             source_path = str(getattr(self.coordinator, "source_path", "") or "")
-            self.current_project_details.setText(f"课程：{project['title']}\n媒体：{source_path}\n工作目录：{getattr(self.coordinator, 'project_dir', '')}\n字幕、配音和讲义自动保存；导出位置在 05 导出页选择。")
+            self.current_project_details.setText(f"{project['title']}\n项目目录：{getattr(self.coordinator, 'project_dir', '')}")
+            self.current_project_details.setToolTip(f"原媒体：{source_path}")
             self.media_status.setText(Path(source_path).name if source_path and Path(source_path).is_file() else "未关联可播放媒体 · 请重连原课文件")
             if source_path != self._source_loaded:
                 self.player.stop()
@@ -1716,12 +1733,11 @@ class MainWindow(QMainWindow):
         measured = self._alignment_report.get("measured_count", 0)
         missing = self._alignment_report.get("missing_count", 0)
         if measured:
-            self.dub_status.setText(f"已测量 {measured} 句，剩余 {problems} 句需处理；"
-                f"调整停顿 {self._alignment_report.get('pause_compacted_count',0)} 句，共享时间 {self._alignment_report.get('shifted_count',0)} 句，"
-                f"局部加速 {self._alignment_report.get('accelerated_count',0)} 句。" +
-                (f"另有 {missing} 句需生成。" if missing else "可集中试听剩余问题，或抽查自动处理结果。"))
+            self.dub_status.setText(f"已测量 {measured} 句 · 待处理 {problems} 句"+(f" · 待生成 {missing} 句" if missing else ""))
+            self.dub_status.setToolTip(f"调整停顿 {self._alignment_report.get('pause_compacted_count',0)} 句，"
+                f"共享时间 {self._alignment_report.get('shifted_count',0)} 句，局部加速 {self._alignment_report.get('accelerated_count',0)} 句。")
         if not problems:
-            self.dub_issues.addItem("暂无已知时长问题。新合成的配音会在生成时重新测量。")
+            self.dub_issues.addItem("没有需要处理的时长问题")
         else:
             self.dub_issues.setCurrentRow(0)
         self.repair_dub_button.setEnabled(bool(problems) and not self._view_busy)
@@ -2100,11 +2116,11 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(str(message))
 
     def _show_error(self, message):
-        QMessageBox.warning(self, "课译 TransLesson", str(message))
+        QMessageBox.warning(self, "课译TransLesson", str(message))
 
     def _about(self):
         from mathbridge import __version__
-        QMessageBox.information(self, "关于课译 TransLesson", f"课译 TransLesson {__version__}\n\n本地数学课程翻译与校对工作台。\n支持字幕校对、课程术语、公式证据、多人声线配置和多格式导出。\n\nASR 与自动区分说话人需本地模型；原声克隆需另行启动本机 GPT-SoVITS 服务。文本 API 需单独授权。克隆音色需试听确认，自动手写公式 OCR 仍待实现。")
+        QMessageBox.information(self, "关于"+APP_NAME, f"{APP_NAME} {__version__}\n{APP_PURPOSE}")
 
     def closeEvent(self, event):
         if not self._commit_all():

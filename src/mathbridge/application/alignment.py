@@ -320,6 +320,10 @@ def cached_alignment_report(project, settings, root, options=None):
                           limit_end_ms=segments[index + 1]["start_ms"] if index + 1 < len(segments)
                           else project["source"]["duration_ms"]))
     plans, issues = plan_alignment(clips, project["source"]["duration_ms"], config)
+    merges=suggest_merges(project,{clip["segment_id"]:clip["speech_ms"] for clip in clips},config)
+    problem_ids={issue['segment_id'] for issue in issues}
+    merges['suggested_merges']=[group for group in merges['suggested_merges'] if problem_ids.intersection(group)]
+    if not issues:merges['predicted_remaining_count']=0
     return dict(input_fingerprint=alignment_fingerprint(project, settings, config),
                 project_revision=project["revision"], options=config, issues=issues,
                 measured_count=len(plans), missing_count=len(missing), missing_segment_ids=missing,
@@ -330,7 +334,7 @@ def cached_alignment_report(project, settings, root, options=None):
                 shifted_count=sum(abs(c.get("shift_ms",0))>20 for c in plans),
                 accelerated_count=sum(c["speed"]>1.005 for c in plans),
                 borrowed_before_count=sum(c.get("borrowed_before_ms",0)>20 for c in plans),
-                **suggest_merges(project, {clip["segment_id"]: clip["speech_ms"] for clip in clips}, config))
+                **merges)
 
 
 # Kept as an explicit read-only entry point for UI and diagnostics.

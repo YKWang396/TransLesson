@@ -14,8 +14,8 @@ def file_version(filename):
     return VSVersionInfo(ffi=FixedFileInfo(filevers=version_tuple, prodvers=version_tuple,
         mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)), kids=[
         StringFileInfo([StringTable('080404b0',[
-            StringStruct('FileDescription','课译 TransLesson'),
-            StringStruct('ProductName','课译 TransLesson'),
+            StringStruct('FileDescription','课译TransLesson · 课程翻译工作台'),
+            StringStruct('ProductName','课译TransLesson'),
             StringStruct('InternalName','TransLesson'),
             StringStruct('FileVersion',app_version),
             StringStruct('ProductVersion',app_version),
@@ -28,6 +28,7 @@ handout = root / 'src' / 'mathbridge' / 'handout'
 if not (handout / 'node_modules' / 'mathjax-full').exists():
     raise RuntimeError('Run handout/install-mathjax.ps1 before packaging')
 datas = [
+    (str(root / 'src/mathbridge/resources'), 'mathbridge/resources'),
     (str(root / 'src/mathbridge/schemas'), 'mathbridge/schemas'),
     (str(handout / 'render_math.cjs'), 'mathbridge/handout'),
     (str((handout / 'node_modules/mathjax-full/js').resolve()), 'mathbridge/handout/node_modules/mathjax-full/js'),
@@ -70,9 +71,10 @@ for name, path in openssl.items():
 a.binaries = [(entry[0], str(openssl[Path(entry[0]).name.lower()]), entry[2])
               if Path(entry[0]).name.lower() in openssl else entry for entry in a.binaries]
 pyz = PYZ(a.pure)
-gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name='课译 TransLesson', debug=False,
+gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name='课译TransLesson', debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=False,
-          version=file_version('课译 TransLesson.exe'))
+          icon=str(root / 'src/mathbridge/resources/translesson.ico'),
+          version=file_version('课译TransLesson.exe'))
 worker = EXE(pyz, a.scripts, [], exclude_binaries=True, name='translesson-worker', debug=False,
              bootloader_ignore_signals=False, strip=False, upx=False, console=True,
              version=file_version('translesson-worker.exe'))

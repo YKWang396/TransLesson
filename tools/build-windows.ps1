@@ -7,4 +7,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows build failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest generation failed.' }
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'tools/build-launcher.ps1'
 if ($LASTEXITCODE -ne 0) { throw 'Workspace launcher build failed.' }
-Write-Host 'Portable application: dist\TransLesson\课译 TransLesson.exe. Keep the whole folder together.'
+Write-Host 'Portable application: dist\TransLesson\课译TransLesson.exe. Keep the whole folder together.'

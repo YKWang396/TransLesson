@@ -70,7 +70,7 @@ def main():
             while chunk := f.read(1024 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()
-    report = {'application_name': '课译 TransLesson', 'application_version': application_version, 'platform': platform.platform(), 'python': sys.version, 'packages': records,
+    report = {'application_name': '课译TransLesson', 'application_version': application_version, 'platform': platform.platform(), 'python': sys.version, 'packages': records,
               'node': {'version': node_version, 'sha256': sha(node) if node else None, 'license_status': 'Upstream Node.js and bundled third-party license collection required before public redistribution'},
               'mathjax': {'version': mathjax_data['version'], 'license': mathjax_data['license']},
               'ffmpeg': {'version_and_configuration': ffmpeg_version, 'sha256': sha(ffmpeg), 'license': 'GPL version 3 or later per actual -L output; compatible corresponding source distribution must be arranged before public redistribution'},
@@ -80,7 +80,19 @@ def main():
     (ROOT / 'packaging/windows/runtime-manifest.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     shutil.copyfile(ROOT / 'packaging/windows/runtime-manifest.json', package_root / 'runtime-manifest.json')
     shutil.copytree(ROOT / 'docs', package_root / 'docs', dirs_exist_ok=True)
-    (package_root / '使用说明.md').write_text('# 课译 TransLesson 0.1\n\n双击课译 TransLesson.exe 启动。请保留整个文件夹。\n\n[详细使用说明](docs/08-user-guide.md) · [多人原声配音配置](docs/11-voice-backends.md) · [实现与验证范围](docs/09-implementation-status.md)\n\nWhisper 和说话人识别模型需要另行准备；文本 API 需要 Key 和文本上传许可。每人可配置独立系统声音，或通过本机 GPT-SoVITS 服务参考原声配音。克隆模型及服务未打包，真实音色相似度和长课效果需另行验收。\n', encoding='utf-8')
+    components=package_root/'components'
+    components.mkdir(exist_ok=True)
+    shutil.copyfile(ROOT/'components/README.md',components/'README.md')
+    resources=ROOT/'src/mathbridge/resources'
+    for original,name in [('gpt-sovits-service.ps1','gpt-sovits-service.ps1'),
+                          ('start-voice-service.cmd','启动声音服务.cmd'),('stop-voice-service.cmd','停止声音服务.cmd')]:
+        shutil.copyfile(resources/original,components/name)
+    (package_root / '使用说明.md').write_text(
+        '# 课译TransLesson '+application_version+'\n\n双击课译TransLesson.exe 启动，请保留整个文件夹。\n\n'
+        '本地组件放在 components/GPT-SoVITS 和 components/faster-whisper-small，应用会自动识别；也可在处理设置中指定组件目录。'
+        '在 03 配音点击“启动声音服务”，等待显示已就绪后使用原声音色。\n\n'
+        '[使用说明](docs/08-user-guide.md) · [组件与服务](docs/18-components-and-branding.md) · [项目迁移](docs/12-another-computer.md)\n\n'
+        '项目与课程视频单独保存；文本 API 使用所配置的 Key。常规程序下载包不包含大型模型和 GPT-SoVITS 运行环境，迁移完整本机软件时请一并复制 components。\n',encoding='utf-8')
     print(f'Recorded {len(records)} installed runtime packages and available license files')
 
 

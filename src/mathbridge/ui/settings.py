@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-import shutil
 import sys
 from pathlib import Path
 
@@ -11,6 +9,7 @@ from PySide6.QtWidgets import (
     QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSpinBox,
     QTabWidget, QVBoxLayout, QWidget,
 )
+from mathbridge.application.components import component_paths,default_components_directory,resolve_component_settings,whisper_available,gpt_sovits_available
 
 _MODEL_ROOT = (Path(sys.executable).resolve().parents[2] if getattr(sys, "frozen", False)
                else Path(__file__).resolve().parents[3]) / "models" / "speakers"
@@ -41,6 +40,7 @@ DEFAULTS = {
     "budget_cny": 5.0, "max_calls": 10000,
     "input_price_per_million": 2.0, "output_price_per_million": 8.0,
     "remember_api_key": False,
+    "components_root": "", "gpt_sovits_path": "",
 }
 
 
@@ -62,7 +62,7 @@ def load_settings() -> dict:
     # Legacy 100-call limits stopped otherwise affordable long courses. The
     # single user-facing limit is now the project budget; retain a high fuse.
     result["max_calls"] = DEFAULTS["max_calls"]
-    return result
+    return resolve_component_settings(result)
 
 
 def save_settings(values: dict) -> None:
@@ -74,24 +74,43 @@ def save_settings(values: dict) -> None:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, values: dict, parent=None):
+    def __init__(self, values: dict, parent=None, *, service_manager=None):
         super().__init__(parent)
-        self.setWindowTitle("处理设置 · 本地模型与 API")
+        self.setWindowTitle("处理设置")
         self.setMinimumSize(680, 610)
         self.values = dict(values)
         self.fields = {}
+        if service_manager is None:
+            from .voice_service import LocalVoiceService
+            service_manager=LocalVoiceService(self)
+        self.service_manager=service_manager
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
         layout.addWidget(tabs)
 
         local = QWidget()
         form = QFormLayout(local)
-        intro = QLabel("模型需提前准备。应用不会在识别或翻译时自动下载模型。")
-        intro.setWordWrap(True)
-        intro.setObjectName("description")
-        form.addRow(intro)
-        self._path(form, "whisper_model_path", "Whisper 本地模型目录", directory=True)
-        self._combo(form, "whisper_device", "运算设备", [("CPU（当前验证基线）", "cpu")])
+        self._path(form,"components_root","组件目录",directory=True)
+        if not self.fields['components_root'].text():self.fields['components_root'].setText(str(default_components_directory()))
+        self.component_status=QLabel();self.component_status.setWordWrap(True)
+        form.addRow(self.component_status)
+        custom=QCheckBox("自定义组件位置")
+        positions=QWidget();positions_form=QFormLayout(positions);positions_form.setContentsMargins(0,0,0,0)
+        self._path(positions_form,"whisper_model_path","Whisper 模型",directory=True)
+        self._path(positions_form,"gpt_sovits_path","GPT-SoVITS",directory=True)
+        custom.toggled.connect(positions.setVisible);positions.hide()
+        form.addRow(custom);form.addRow(positions)
+        self.fields['components_root'].textChanged.connect(self._mount_components)
+        self.fields['whisper_model_path'].textChanged.connect(self._component_status)
+        self.fields['gpt_sovits_path'].textChanged.connect(self._component_status)
+        self._component_status()
+        advanced_processing=QWidget()
+        advanced_form=QFormLayout(advanced_processing);advanced_form.setContentsMargins(0,0,0,0)
+        processing_toggle=QCheckBox("高级识别设置")
+        processing_toggle.toggled.connect(advanced_processing.setVisible);advanced_processing.hide()
+        form.addRow(processing_toggle);form.addRow(advanced_processing)
+        form=advanced_form
+        self._combo(form, "whisper_device", "运算设备", [("CPU", "cpu")])
         self._combo(form, "whisper_compute_type", "Whisper 精度", [("int8", "int8")])
         diarize = QCheckBox("自动处理时，在转写后区分说话人")
         diarize.setChecked(bool(values.get("diarization_enabled", False)))
@@ -100,20 +119,12 @@ class SettingsDialog(QDialog):
         self._path(form, "diarization_segmentation_path", "说话人分段 ONNX 模型")
         self._path(form, "diarization_embedding_path", "声纹 ONNX 模型")
         self._number(form, "diarization_num_speakers", "说话人数（0 = 自动判断）", 0, 100)
-        speaker_hint = QLabel("自动区分需要本地 sherpa-onnx 组件和两份模型；未配置时仍可手动添加、分配说话人。多人同时讲话的片段需人工校对。")
+        speaker_hint = QLabel("自动区分说话人需要两份 ONNX 模型，也可在校对页手动分配。")
         speaker_hint.setWordWrap(True)
         form.addRow(speaker_hint)
         self._path(form, "ffmpeg_path", "FFmpeg 可执行文件")
         self._path(form, "ffprobe_path", "FFprobe 可执行文件")
-        local_hint = QLabel("离线文本模式需提前启动本机 llama.cpp 服务，并在 API 地址中填写 http://127.0.0.1:端口/v1；当前版本不会自动启动服务。")
-        local_hint.setWordWrap(True)
-        form.addRow(local_hint)
-        state = []
-        for label, module in [("faster-whisper", "faster_whisper"), ("说话人区分", "sherpa_onnx"), ("PDF 排版", "reportlab")]:
-            state.append(f"{label}：{'已安装' if importlib.util.find_spec(module) else '未安装'}")
-        state.append(f"系统 FFmpeg：{shutil.which('ffmpeg') or '未在 PATH 中找到（可使用内置工具）'}")
-        form.addRow(QLabel("\n".join(state)))
-        tabs.addTab(self._scroll(local), "本地处理")
+        tabs.addTab(self._scroll(local), "组件与识别")
 
         api = QWidget()
         form = QFormLayout(api)
@@ -147,7 +158,7 @@ class SettingsDialog(QDialog):
         advanced_toggle.toggled.connect(advanced.setVisible)
         form.addRow(advanced_toggle)
         form.addRow(advanced)
-        explanation = QLabel("API 自动完成断句、翻译和讲义整理，无需逐句填写。未勾选保存时密钥仅留在本次会话。费用根据高级设置中的单价估算，以服务商账单为准。")
+        explanation = QLabel("费用按设置的单价估算，以服务商账单为准。")
         explanation.setWordWrap(True)
         explanation.setObjectName("notice")
         form.addRow(explanation)
@@ -165,8 +176,26 @@ class SettingsDialog(QDialog):
         self._line(form, "voice_clone_api_url", "本地 GPT-SoVITS 服务地址")
         model = self._line(form, "voice_clone_model", "克隆模型版本")
         model.setToolTip("本地服务更换模型后修改此项，以重新生成配音。")
+        service_row=QWidget();service_layout=QHBoxLayout(service_row);service_layout.setContentsMargins(0,0,0,0)
+        self.start_voice_button=QPushButton("启动声音服务")
+        self.stop_voice_button=QPushButton("停止服务")
+        service_layout.addWidget(self.start_voice_button);service_layout.addWidget(self.stop_voice_button)
+        logs=QPushButton("打开日志");service_layout.addWidget(logs)
+        form.addRow(service_row)
+        self.voice_service_status=QLabel(self.service_manager.message);self.voice_service_status.setWordWrap(True)
+        form.addRow(self.voice_service_status)
+        self.start_voice_button.clicked.connect(lambda:self.service_manager.start(self.result_values()))
+        self.stop_voice_button.clicked.connect(lambda:self.service_manager.stop(self.result_values()))
+        self.service_manager.changed.connect(self._voice_service_changed)
+        self.service_manager.busyChanged.connect(self._voice_service_busy)
+        def open_logs():
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            root=Path(self.fields['gpt_sovits_path'].text())/'output'
+            if root.is_dir():QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+        logs.clicked.connect(open_logs)
         self._combo(form, "subtitle_position", "字幕位置", [("底部", "bottom"), ("顶部", "top")])
-        note = QLabel("每位说话人的声音在“03 配音”单独配置。原声音色需先准备 GPT-SoVITS 模型并启动本机服务，仅接受本机回环地址。克隆效果取决于参考片段和模型，需试听确认。")
+        note = QLabel("每位说话人的声音和参考原声在“03 配音”中配置。")
         note.setWordWrap(True)
         note.setObjectName("notice")
         form.addRow(note)
@@ -178,6 +207,25 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _voice_service_changed(self,_status,message):
+        self.voice_service_status.setText(message)
+
+    def _voice_service_busy(self,busy):
+        self.start_voice_button.setEnabled(not busy);self.stop_voice_button.setEnabled(not busy)
+
+    def _mount_components(self,text):
+        paths=component_paths(text)
+        # Mount the selected root as a unit; never leave an old component from
+        # another installation silently attached when the new one is missing.
+        self.fields['whisper_model_path'].setText(paths['whisper_model_path'])
+        self.fields['gpt_sovits_path'].setText(paths['gpt_sovits_path'])
+        self._component_status()
+
+    def _component_status(self,*_):
+        whisper=whisper_available(self.fields['whisper_model_path'].text())
+        gpt=gpt_sovits_available(self.fields['gpt_sovits_path'].text())
+        self.component_status.setText(f"Whisper：{'已找到' if whisper else '未找到'}    GPT-SoVITS：{'已找到' if gpt else '未找到'}")
 
     @staticmethod
     def _scroll(content):
@@ -208,7 +256,7 @@ class SettingsDialog(QDialog):
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         edit = QLineEdit(str(self.values.get(key, "")))
-        edit.setPlaceholderText("未配置")
+        edit.setPlaceholderText("使用内置工具" if key in ('ffmpeg_path','ffprobe_path') else "未配置")
         self.fields[key] = edit
         button = QPushButton("浏览")
         def choose():
