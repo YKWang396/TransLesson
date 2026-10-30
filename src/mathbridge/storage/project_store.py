@@ -66,4 +66,17 @@ class ProjectStore:
     @property
     def source_path(self) -> str:
         link = self.read("inputs/source.link.json", {})
-        return link.get("absolute_path", "")
+        original = link.get("absolute_path", "")
+        if original and Path(original).is_file():
+            return original
+        # A copied project can carry its media beside project.json. Accept only
+        # a matching source hash, never a same-name but different lecture.
+        if original:
+            candidate = self.root / Path(original).name
+            if candidate.is_file() and candidate.stat().st_size == link.get("size"):
+                from mathbridge.domain.project import file_hash
+                if file_hash(candidate) == link.get("sha256"):
+                    self.write("inputs/source.link.json", {**link, "absolute_path": str(candidate),
+                               "mtime_ns": candidate.stat().st_mtime_ns})
+                    return str(candidate)
+        return original

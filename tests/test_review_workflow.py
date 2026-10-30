@@ -33,7 +33,7 @@ def test_guide_starts_with_the_missing_prerequisite(lesson, tmp_path):
 
 def test_guide_offers_manual_or_configured_translation(lesson):
     lesson["segments"][0].update(target_text="", subtitle_plain="", tts_text="", review="needs_review")
-    assert review_guidance(lesson, {"text_provider": "manual"})["action"] == "review"
+    assert review_guidance(lesson, {"text_provider": "manual"})["action"] == "configure_translation"
     settings = dict(text_provider="deepseek", model="test", api_key="test-key", allow_text_api=False)
     assert review_guidance(lesson, settings)["action"] == "configure_translation"
     settings["allow_text_api"] = True
@@ -58,6 +58,13 @@ def test_guide_makes_sentence_confirmation_optional_and_calls_out_math(lesson):
     assert review_guidance(lesson, {})["action"] == "go_dub"
     assert not review_guidance(lesson, {}, busy=True)["enabled"]
     assert not review_guidance(lesson, {}, dirty=True)["enabled"]
+
+
+def test_guide_resumes_translation_without_repeating_completed_ai_segmentation(lesson):
+    for number, segment in enumerate(lesson["segments"]):
+        segment.update(id=f"sentence-{number}", target_text="", subtitle_plain="", tts_text="", review="needs_review")
+    settings = dict(text_provider="deepseek",model="test",api_key="test-key",allow_text_api=True)
+    assert review_guidance(lesson,settings)["action"] == "translate_missing"
 
 
 def test_simple_formula_edit_keeps_math_and_spoken_reading(lesson):
@@ -126,14 +133,14 @@ def test_confirming_an_unchanged_subtitle_keeps_custom_spoken_text(lesson, tmp_p
     assert coordinator.project["segments"][0]["tts_text"] == segment["tts_text"]
 
 
-def test_prepare_translation_runs_analysis_before_translation(lesson, monkeypatch):
+def test_prepare_translation_organizes_sentences_before_analysis_and_translation(lesson, monkeypatch):
     coordinator = Coordinator()
     coordinator.project = lesson
     started = []
     monkeypatch.setattr(coordinator, "_start", lambda stage, options: started.append(stage))
     coordinator.run_stage("prepare_translation")
-    assert started == ["analyze"]
-    assert coordinator._pipeline == ["translate"]
+    assert started == ["sentences"]
+    assert coordinator._pipeline == ["analyze", "translate"]
 
 
 def test_bulk_confirmation_saves_once_and_preserves_formula_review(lesson, tmp_path):

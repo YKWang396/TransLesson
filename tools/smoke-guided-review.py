@@ -35,6 +35,8 @@ def main():
             QFontDatabase.addApplicationFont(str(fonts / name))
     qa = ROOT / "tmp" / ("guided-review-" + uuid.uuid4().hex[:10])
     qa.mkdir(parents=True)
+    from ui_test_settings import isolate_settings
+    isolate_settings(qa)
     sample = json.loads((ROOT / "examples/project.json").read_text(encoding="utf-8"))
     coordinator = Coordinator()
     window = MainWindow(coordinator)

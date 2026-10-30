@@ -1,5 +1,5 @@
 {
-  "application_version": "0.1.2",
+  "application_version": "0.1.3",
   "platform": "Windows-11-10.0.26200-SP0",
   "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
   "packages": [
@@ -301,15 +301,16 @@
     },
     {
       "name": "pillow",
-      "version": "12.3.0",
+      "version": "13.0.0",
       "license": "MIT-CMU",
       "project_urls": [
         "Release notes, https://pillow.readthedocs.io/en/stable/releasenotes/index.html",
         "Changelog, https://github.com/python-pillow/Pillow/releases",
         "Documentation, https://pillow.readthedocs.io",
-        "Funding, https://tidelift.com/subscription/pkg/pypi-pillow?utm_source=pypi-pillow&utm_medium=pypi",
-        "Homepage, https://python-pillow.github.io",
+        "Funding, https://tidelift.com/lifter/search/pypi/pillow",
+        "Homepage, https://python-pillow.org",
         "Mastodon, https://fosstodon.org/@pillow",
+        "Security, https://pillow.readthedocs.io/en/stable/handbook/security.html",
         "Source, https://github.com/python-pillow/Pillow"
       ],
       "license_files": [
@@ -500,7 +501,7 @@
   ],
   "node": {
     "version": "v24.22.1",
-    "sha256": "6d75619e8720161bb0e8c5617bcf90384b48a920b9182ec6e9d52f11f83a8e84",
+    "sha256": "e12473d1871d42b4c10515fc1c1f18a7fd71af07b13d5b3a000b6f0b382e937c",
     "license_status": "Upstream Node.js and bundled third-party license collection required before public redistribution"
   },
   "mathjax": {

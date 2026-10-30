@@ -151,6 +151,17 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         outputs = [str(reference)]
         metadata.update(speaker_id=speaker["id"], reference=True)
 
+    elif stage == "sentences":
+        if settings.get("text_provider", "manual") == "manual":
+            raise ValueError("PROVIDER_UNAVAILABLE: AI 断句需要在处理设置中配置文本 API")
+        if not project["segments"]:
+            raise ValueError("EMPTY_TRANSCRIPT: 请先识别原文或导入字幕")
+        from mathbridge.providers.translation.course import organize_sentences
+        data = organize_sentences(project, settings, cancel=cancel, progress=progress)
+        for key in ("segments", "formulas", "glossary", "notes"):
+            project[key] = data[key]
+        metadata.update(usage=data["usage"], sentences=data["sentence_metadata"])
+
     elif stage == "analyze":
         from mathbridge.math.analysis import analyze
         data = analyze(project)
@@ -165,7 +176,7 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         if not project["segments"]:
             raise ValueError("EMPTY_TRANSCRIPT: 请先转写或导入字幕")
         from mathbridge.providers.translation.deepseek import translate
-        translation_settings = dict(settings, _translation_missing_only=bool(options.get("missing_only")))
+        translation_settings = dict(settings, _translation_missing_only=bool(options.get("missing_only", True)))
         data = translate(project, translation_settings, cancel=cancel, progress=progress)
         for key in ("segments", "formulas", "glossary", "notes"):
             if key in data:
@@ -275,14 +286,14 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
 
     elif stage == "notes":
         from mathbridge.handout.export import export_handout
+        if settings.get("text_provider", "manual") == "manual":
+            raise ValueError("PROVIDER_UNAVAILABLE: AI 教学讲义需要在处理设置中配置文本 API；已有讲义可直接导出")
+        from mathbridge.providers.translation.course import generate_handout
+        data = generate_handout(project, settings, cancel=cancel, progress=progress)
+        project["notes"] = data["notes"]
+        metadata["usage"] = data["usage"]
         if not project["notes"]:
-            # Evidence-only fallback; no invented learning goals or proof completion.
-            for index, s in enumerate(project["segments"]):
-                if s["target_text"].strip():
-                    project["notes"].append(dict(id=f"note-{index + 1}", kind="course", heading=f"课程片段 {index + 1}", body=s["target_text"],
-                                                 segment_ids=[s["id"]], formula_ids=s["formula_ids"], review="needs_review"))
-        if not project["notes"]:
-            raise ValueError("EMPTY_NOTES: 请先翻译课程或编辑有来源的讲义")
+            raise ValueError("EMPTY_NOTES: 请在处理设置中配置文本 API，AI 会按知识点整理教学讲义")
         dest = job_dir / "handout-draft.pdf"
         project["revision"] += 1
         export_handout(project, dest, job_dir / "handout-draft.md", project_dir=root)
@@ -379,7 +390,7 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
     else:
         raise ValueError("UNKNOWN_STAGE: " + stage)
 
-    if stage in {"transcribe", "import_subtitles", "diarize", "analyze", "translate", "notes"}:
+    if stage in {"transcribe", "import_subtitles", "diarize", "sentences", "analyze", "translate", "notes"}:
         validate_project(project)
         return dict(project=project, artifacts=artifacts, outputs=outputs, metadata=metadata)
     return dict(artifacts=artifacts, outputs=outputs, metadata=metadata)

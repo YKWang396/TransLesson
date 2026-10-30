@@ -33,6 +33,8 @@ def main():
         if (font_root / name).exists():
             QFontDatabase.addApplicationFont(str(font_root / name))
     folder = ROOT / "tmp" / ("ui-smoke-" + uuid.uuid4().hex[:10])
+    from ui_test_settings import isolate_settings
+    isolate_settings(folder)
     project = json.loads((ROOT / "examples" / "project.json").read_text(encoding="utf-8"))
     store = ProjectStore(folder)
     store.save(project)
@@ -58,7 +60,7 @@ def main():
     assert coordinator.project["revision"] == 2
     assert "UI 校对集成验证" in store.load()["segments"][0]["subtitle_plain"]
     formula = FormulaDialog(coordinator.project["formulas"][0], window)
-    formula.fields["spoken_target"].setPlainText("x 的平方加二 x 加一")
+    formula.fields["spoken_target"].setPlainText("x 的平方，加二 x，再加一")
     coordinator.update_formula("formula-1", formula.changes())
     term = TermDialog(coordinator.project["glossary"][0], window)
     term.fields["context"].setText("UI 校对后的术语上下文")

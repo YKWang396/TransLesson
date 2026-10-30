@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QSettings
+from PySide6.QtCore import Qt, QTimer, QUrl, QSettings, QStandardPaths
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -22,7 +22,7 @@ from .issue_dialogs import SpokenTextDialog
 from .theme import STYLESHEET
 
 
-STAGES = {"create": "建立项目", "transcribe": "识别课程原文", "diarize": "区分说话人", "analyze": "检查数学表达", "translate": "生成译文", "prepare_translation": "生成译文", "dub": "生成配音", "speaker_reference": "提取参考原声", "notes": "整理讲义", "export": "导出", "frame": "提取当前帧", "preview": "生成预览", "pipeline": "自动处理草稿", "import_subtitles": "导入字幕"}
+STAGES = {"create": "建立项目", "transcribe": "识别课程原文", "diarize": "区分说话人", "sentences": "AI 整理句意与断句", "analyze": "检查数学表达", "translate": "AI 翻译", "prepare_translation": "AI 断句并翻译", "dub": "生成配音", "speaker_reference": "提取参考原声", "notes": "AI 整理教学讲义", "export": "导出", "frame": "提取当前帧", "preview": "生成预览", "pipeline": "自动处理草稿", "import_subtitles": "导入字幕"}
 
 
 def timecode(ms):
@@ -125,6 +125,12 @@ class MainWindow(QMainWindow):
         self.saved = label("本地工作空间", "saveStatus")
         header.addWidget(self.saved)
         header.addWidget(button("打开项目", self._open_project))
+        self.recent_projects = QComboBox()
+        self.recent_projects.setMaximumWidth(180)
+        self.recent_projects.setToolTip("选择后直接恢复项目、媒体与保存位置")
+        self.recent_projects.activated.connect(self._open_recent_project)
+        self._refresh_recent_projects()
+        header.addWidget(self.recent_projects)
         header.addWidget(button("处理设置", self._settings))
         outer.addLayout(header)
         self.tabs = QTabWidget()
@@ -191,8 +197,18 @@ class MainWindow(QMainWindow):
         left = QVBoxLayout()
         left.addSpacing(15)
         left.addWidget(label("把数学课，带到另一种语言。", "pageTitle"))
-        left.addWidget(label("在本地保留视频时间轴，逐段校对译文、公式与课程讲义。", "description"))
-        form_box = QGroupBox("新建课程项目")
+        left.addWidget(label("AI 自动断句、翻译并整理教学讲义，修改自动保存在当前项目中。", "description"))
+        self.current_project_box = QGroupBox("当前项目 · 已恢复工作进度")
+        current = QVBoxLayout(self.current_project_box)
+        self.current_project_details = label("", "description")
+        current.addWidget(self.current_project_details)
+        current.addWidget(button("继续处理 / 查看字幕", lambda: self.tabs.setCurrentIndex(1), True))
+        current.addWidget(button("打开项目文件夹", self._open_project_folder))
+        left.addWidget(self.current_project_box)
+        self.new_project_toggle = QCheckBox("新建另一个课程项目")
+        self.new_project_toggle.toggled.connect(self._toggle_new_project)
+        left.addWidget(self.new_project_toggle)
+        form_box = self.new_project_form = QGroupBox("新建课程项目")
         form = QFormLayout(form_box)
         form.setVerticalSpacing(14)
         self.media_path = QLineEdit()
@@ -202,7 +218,7 @@ class MainWindow(QMainWindow):
         row.addWidget(button("选择文件", self._pick_media))
         form.addRow("课程媒体", row)
         self.directory_path = QLineEdit()
-        self.directory_path.setPlaceholderText("选择用于保存项目的新文件夹")
+        self.directory_path.setPlaceholderText("选择媒体后自动生成，可另选目录")
         row = QHBoxLayout()
         row.addWidget(self.directory_path, 1)
         row.addWidget(button("选择目录", self._pick_directory))
@@ -229,7 +245,7 @@ class MainWindow(QMainWindow):
         self.import_subtitles_button = button("导入 SRT / VTT 转写", self._import_subtitles)
         existing.addWidget(self.import_subtitles_button)
         left.addLayout(existing)
-        left.addWidget(label("项目按 revision 保存校对内容；大文件检查与处理在独立进程运行。", "description"))
+        left.addWidget(label("打开已有项目即可继续，无需重选媒体或保存目录。成品默认保存到项目的 exports 文件夹，导出时可另存。", "description"))
         left.addStretch()
         layout.addLayout(left, 3)
         right = QVBoxLayout()
@@ -237,9 +253,9 @@ class MainWindow(QMainWindow):
         steps = QVBoxLayout(guide)
         for n, title, desc in [
             ("1", "转写与证据", "本地 Whisper 识别，或导入已有字幕。"),
-            ("2", "逐段翻译与校对", "源句、译文、字幕和读法分别编辑。"),
+            ("2", "AI 断句并翻译", "连贯理解上下文，合并碎句、合理拆分长句；无需逐句填写。"),
             ("3", "标准配音与试听", "系统声音合成，检查语速和片段时长。"),
-            ("4", "讲义与多格式导出", "保留公式来源，固定 revision 后导出。"),
+            ("4", "AI 教学讲义与导出", "按知识点整理定义、推导、例题与小结，保留课程来源。"),
         ]:
             steps.addWidget(label(f"{n}   {title}"))
             steps.addWidget(label(desc, "description"))
@@ -264,7 +280,7 @@ class MainWindow(QMainWindow):
         guide_layout.setContentsMargins(14, 10, 14, 10)
         guide_text = QVBoxLayout()
         guide_text.setSpacing(3)
-        self.review_steps = label("1 获得原文    →    2 生成译文    →    3 抽查与问题处理    →    4 去配音", "description")
+        self.review_steps = label("1 获得原文    →    2 AI 断句并翻译    →    3 抽查与问题处理    →    4 去配音", "description")
         guide_text.addWidget(self.review_steps)
         self.review_guide_title = label("先导入一个课程视频", "guideTitle")
         guide_text.addWidget(self.review_guide_title)
@@ -285,7 +301,10 @@ class MainWindow(QMainWindow):
         options = QHBoxLayout()
         self.review_import_subtitles_button = button("我有现成字幕", self._import_subtitles)
         options.addWidget(self.review_import_subtitles_button)
-        self.review_manual_button = button("手动填写字幕", self._manual_review)
+        self.smart_translate_button = self._stage_button("AI 重新断句并翻译", "prepare_translation", True)
+        self.smart_translate_button.setToolTip("AI 根据上下文重新划分句子并生成字幕和配音读法；原文保留，已有译文重新生成，可通过项目菜单撤销。旧讲义来源会随分段更新，建议之后重新生成讲义。")
+        options.addWidget(self.smart_translate_button)
+        self.review_manual_button = button("手动修订", self._manual_review)
         options.addWidget(self.review_manual_button)
         self.review_problems_button = button("问题清单", self._show_review_problems)
         options.addWidget(self.review_problems_button)
@@ -584,9 +603,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         header = QHBoxLayout()
         header.addWidget(label("有出处的课程讲义", "pageTitle"), 1)
-        header.addWidget(self._stage_button("整理 / 更新讲义草稿", "notes", True))
+        header.addWidget(self._stage_button("AI 生成 / 重新整理教学讲义", "notes", True))
         layout.addLayout(header)
-        layout.addWidget(label("核心内容应引用课程片段或公式。编辑后自动保存，确认前请逐项核对证据。", "description"))
+        layout.addWidget(label("AI 按知识点组织学习概览、定义、推导、课堂例题与小结，合并重复内容。重新生成会替换当前讲义，可撤销；双击来源可回听原课。", "description"))
         split = QSplitter(Qt.Orientation.Horizontal)
         self.note_list = QListWidget()
         self.note_list.currentItemChanged.connect(self._note_selected)
@@ -851,11 +870,24 @@ class MainWindow(QMainWindow):
             self.media_path.setText(path)
             if not self.title_input.text():
                 self.title_input.setText(Path(path).stem)
+            if not self.directory_path.text():
+                import re
+                name = re.sub(r'[<>:"/\\|?*]', "_", Path(path).stem)[:100].rstrip(" .") or "课程"
+                base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)) / "MathBridgeProjects"
+                candidate = base / name
+                suffix = 2
+                while (candidate / "project.json").exists():
+                    candidate = base / f"{name}-{suffix}"
+                    suffix += 1
+                self.directory_path.setText(str(candidate))
 
     def _pick_directory(self):
         path = QFileDialog.getExistingDirectory(self, "选择项目目录（建议使用空文件夹）")
         if path:
-            self.directory_path.setText(path)
+            if (Path(path) / "project.json").is_file():
+                self._call("open_project", path)
+            else:
+                self.directory_path.setText(path)
 
     def _pick_export_directory(self):
         path = QFileDialog.getExistingDirectory(self, "选择导出目录")
@@ -863,6 +895,10 @@ class MainWindow(QMainWindow):
             self.export_directory.setText(path)
 
     def _create_project(self):
+        directory = self.directory_path.text().strip()
+        if directory and (Path(directory) / "project.json").is_file():
+            self._call("open_project", directory)
+            return
         if self.source_language.currentData() == self.target_language.currentData():
             self._show_error("源语言和目标语言应不同。")
             return
@@ -880,6 +916,31 @@ class MainWindow(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "打开 MathBridge 项目目录")
         if path:
             self._call("open_project", path)
+
+    def _toggle_new_project(self, checked):
+        self.new_project_form.setVisible(checked or not self._project)
+        if checked:
+            self.media_path.clear()
+            self.directory_path.clear()
+            self.title_input.clear()
+
+    def _refresh_recent_projects(self):
+        store = QSettings("MathBridge", "MathBridge")
+        paths = store.value("recent_projects", []) or []
+        if isinstance(paths, str):
+            paths = [paths]
+        self.recent_projects.clear()
+        self.recent_projects.addItem("最近项目…", "")
+        for path in paths:
+            if (Path(path) / "project.json").is_file():
+                self.recent_projects.addItem(Path(path).name, path)
+                self.recent_projects.setItemData(self.recent_projects.count()-1, path, Qt.ItemDataRole.ToolTipRole)
+
+    def _open_recent_project(self, index):
+        path = self.recent_projects.itemData(index)
+        if path:
+            self._call("open_project", path)
+        self.recent_projects.setCurrentIndex(0)
 
     def _import_subtitles(self):
         if not self._project:
@@ -1092,11 +1153,12 @@ class MainWindow(QMainWindow):
         uncertain_requests = int(usage.get("uncertain_requests", 0) or 0)
         budget = float(self.coordinator.settings.get("budget_cny", 0) or 0)
         limit = int(self.coordinator.settings.get("max_calls", 0) or 0)
-        text = f"API 估计 ¥{reserved:.2f} / ¥{budget:.2f} · {calls}/{limit} 次"
+        text = f"API 估计 ¥{reserved:.2f} / ¥{budget:.2f}"
         if uncertain:
             text += f"（含待核实预留 ¥{uncertain:.2f}）"
         self.usage_label.setText(text)
         self.usage_label.setToolTip(
+            f"累计请求：{calls} 次\n"
             f"按返回用量估计：¥{cost:.4f}\n"
             f"未能确认结果的请求：{uncertain_requests} 次，预留 ¥{uncertain:.4f}\n"
             f"预算占用合计：¥{reserved:.4f}\n"
@@ -1123,7 +1185,21 @@ class MainWindow(QMainWindow):
             self._segment_dirty = self._note_dirty = False
             self._load_note(None)
             self._sync_editor_dirty()
+            self.export_directory.clear()
+            if project and getattr(self.coordinator, "project_dir", None):
+                store = QSettings("MathBridge", "MathBridge")
+                paths = store.value("recent_projects", []) or []
+                if isinstance(paths, str):
+                    paths = [paths]
+                path = str(self.coordinator.project_dir)
+                store.setValue("recent_projects", [path]+[p for p in paths if p != path][:7])
+                self._refresh_recent_projects()
         self._project = project or None
+        self.current_project_box.setVisible(bool(project))
+        self.new_project_toggle.setVisible(bool(project))
+        if new_project_id != old_project_id:
+            self.new_project_toggle.setChecked(False)
+        self.new_project_form.setVisible(not project or self.new_project_toggle.isChecked())
         self._segment_lookup = {item["id"]: item for item in (project or {}).get("segments", [])}
         self._segment_numbers = {item["id"]: index + 1 for index, item in enumerate((project or {}).get("segments", []))}
         self._loading = True
@@ -1134,6 +1210,7 @@ class MainWindow(QMainWindow):
             self.project_title.setText(project.get("title", "课程项目"))
             self.saved.setText(f"已保存 · revision {project.get('revision', '?')}")
             source_path = str(getattr(self.coordinator, "source_path", "") or "")
+            self.current_project_details.setText(f"课程：{project['title']}\n媒体：{source_path}\n工作目录：{getattr(self.coordinator, 'project_dir', '')}\n字幕、配音和讲义自动保存；导出位置在 05 导出页选择。")
             self.media_status.setText(Path(source_path).name if source_path and Path(source_path).is_file() else "未关联可播放媒体 · 请重连原课文件")
             if source_path != self._source_loaded:
                 self.player.stop()
@@ -1830,7 +1907,7 @@ class MainWindow(QMainWindow):
         if stage == "preview" and not payload.get("metadata", {}).get("stale"):
             self.stage_label.setText("待校对预览已生成 · 在最近文件中双击 preview.mp4 播放")
         self._refresh_issues()
-        if stage in {"transcribe", "import_subtitles", "translate"} and self._project and not metadata.get("stale"):
+        if stage in {"transcribe", "import_subtitles", "sentences", "translate"} and self._project and not metadata.get("stale"):
             self._focus_pending_segment()
         self._refresh_review_guidance()
 

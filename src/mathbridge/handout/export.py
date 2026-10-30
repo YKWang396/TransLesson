@@ -79,6 +79,50 @@ def _font():
     raise RuntimeError("PDF_RENDER_FAILED: 未找到可嵌入的静态中文 TTF；请设置 MATHBRIDGE_CJK_FONT")
 
 
+def _paragraph_text(text, font):
+    """Embed a symbol fallback instead of silently losing mathematical signs."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    primary = pdfmetrics.getFont(font).face.charToGlyph
+    fallback_name = "MathBridgeSymbols"
+    if any(ord(char) not in primary and char not in "\n\r\t" for char in str(text)):
+        if fallback_name not in pdfmetrics.getRegisteredFontNames():
+            for path in ("C:/Windows/Fonts/seguisym.ttf", "C:/Windows/Fonts/segoeui.ttf",
+                         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+                if Path(path).is_file():
+                    try:
+                        pdfmetrics.registerFont(TTFont(fallback_name, path))
+                        break
+                    except Exception:
+                        continue
+        fallback = (pdfmetrics.getFont(fallback_name).face.charToGlyph
+                    if fallback_name in pdfmetrics.getRegisteredFontNames() else {})
+    else:
+        fallback = {}
+    parts, active = [], None
+    for char in str(text):
+        if char in "\r\t":
+            char = " "
+        if char == "\n":
+            if active:
+                parts.append("</font>")
+                active = None
+            parts.append("<br/>")
+            continue
+        selected = font if ord(char) in primary else fallback_name if ord(char) in fallback else None
+        if selected is None:
+            raise ValueError(f"PDF_RENDER_FAILED: 当前字体缺少符号 U+{ord(char):04X}，请更换支持该符号的中文字体")
+        if selected != active:
+            if active:
+                parts.append("</font>")
+            parts.append('<font name="'+selected+'">')
+            active = selected
+        parts.append(html.escape(char))
+    if active:
+        parts.append("</font>")
+    return "".join(parts)
+
+
 def _render_formulas(formulas, destination):
     from PySide6.QtCore import QByteArray, QRectF, Qt
     from PySide6.QtGui import QImage, QPainter
@@ -208,10 +252,11 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
         "heading": ParagraphStyle("Heading", fontName=font, fontSize=15, leading=23, spaceBefore=16, spaceAfter=9, keepWithNext=True, textColor=colors.HexColor("#143D59")),
         "body": ParagraphStyle("Body", fontName=font, fontSize=11, leading=18, wordWrap="CJK", spaceAfter=8),
         "caption": ParagraphStyle("Caption", fontName=font, fontSize=9, leading=14, wordWrap="CJK", textColor=colors.HexColor("#536570"), spaceAfter=8),
+        "status": ParagraphStyle("Status", fontName=font, fontSize=9, leading=14, keepWithNext=True, textColor=colors.HexColor("#536570"), spaceAfter=8),
         "formula": ParagraphStyle("Formula", fontName=font, fontSize=11, leading=18, alignment=TA_CENTER, spaceAfter=8),
     }
     def paragraph(text, style="body"):
-        return Paragraph(html.escape(str(text)).replace("\n", "<br/>"), styles[style])
+        return Paragraph(_paragraph_text(text, font), styles[style])
 
     with tempfile.TemporaryDirectory(prefix="mathbridge-pdf-", dir=output_pdf.parent) as tmp:
         temporary = Path(tmp)
@@ -255,17 +300,28 @@ def export_handout(project: dict, output_pdf: Path, output_md: Path | None = Non
                     return "【原始表达，未确认：" + formula["raw"] + "；来源 " + evidence + "】"
                 return "$" + (formula.get("latex") or formula["raw"]) + "$"
             for note in project["notes"]:
+                section_start = len(story)
                 label = " [补充解释，非原课内容]" if note["kind"] == "supplement" else ""
                 story.append(paragraph(note["heading"] + label, "heading"))
                 if note["review"] != "confirmed":
-                    story.append(paragraph("本节待校对", "caption"))
+                    story.append(paragraph("本节待校对", "status"))
                 # Formula placeholders have their own display blocks, so formulas never split.
                 body = _TOKEN.sub(lambda m: "【" + formula_labels[m[1]] + "，见下式】", note["body"])
                 story.append(paragraph(body))
                 for fid in note["formula_ids"]:
                     story.append(formula_flow(fid))
-                references = [f"{sid} {_timestamp(maps['segments'][sid]['start_ms'])}-{_timestamp(maps['segments'][sid]['end_ms'])}" for sid in note["segment_ids"]]
+                source_segments = sorted((maps["segments"][sid] for sid in note["segment_ids"]), key=lambda s: s["start_ms"])
+                ranges = []
+                for segment in source_segments:
+                    if ranges and segment["start_ms"]-ranges[-1][1] <= 2000:
+                        ranges[-1][1] = max(ranges[-1][1], segment["end_ms"])
+                    else:
+                        ranges.append([segment["start_ms"], segment["end_ms"]])
+                references = [_timestamp(start)+"-"+_timestamp(end) for start, end in ranges]
                 story.append(paragraph("课程来源：" + ("；".join(references) or "引用公式的证据时间"), "caption"))
+                section = story[section_start:]
+                del story[section_start:]
+                story.append(KeepTogether(section))
                 markdown.extend([f"## {note['heading']}{label}", "", _TOKEN.sub(markdown_formula, note["body"]), "", "来源：" + "；".join(references), ""])
         else:
             story.extend([paragraph("逐段证据索引", "heading"), paragraph("尚未生成结构化讲义。以下为课程片段索引，供整理与校对使用。", "caption")])

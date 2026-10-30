@@ -74,6 +74,8 @@ def main():
         if (fonts / name).is_file():
             QFontDatabase.addApplicationFont(str(fonts / name))
     coordinator = Coordinator()
+    from ui_test_settings import isolate_settings
+    isolate_settings(qa)
     with patch("mathbridge.ui.main_window.load_settings", return_value={}):
         window = MainWindow(coordinator)
     coordinator.settings.update(settings, api_key="", allow_text_api=False, remember_api_key=False)

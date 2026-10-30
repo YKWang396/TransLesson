@@ -30,7 +30,7 @@ def _available_whisper_model():
 
 
 DEFAULTS = {
-    "text_provider": "manual", "api_base": "https://api.deepseek.com",
+    "text_provider": "deepseek", "api_base": "https://api.deepseek.com",
     "model": "deepseek-flash", "allow_text_api": False, "allow_image_api": False,
     "whisper_model_path": _available_whisper_model(), "whisper_device": "cpu", "whisper_compute_type": "int8",
     "diarization_enabled": False, "diarization_segmentation_path": _available_model("segmentation.onnx"),
@@ -38,7 +38,7 @@ DEFAULTS = {
     "voice_clone_api_url": "http://127.0.0.1:9880", "voice_clone_model": "default",
     "ffmpeg_path": "", "ffprobe_path": "", "voice": "", "speech_rate": 0,
     "llama_cli_path": "", "llama_model_path": "", "subtitle_position": "bottom",
-    "budget_cny": 5.0, "max_calls": 100,
+    "budget_cny": 5.0, "max_calls": 10000,
     "input_price_per_million": 2.0, "output_price_per_million": 8.0,
     "remember_api_key": False,
 }
@@ -59,6 +59,9 @@ def load_settings() -> dict:
             except (ValueError, TypeError):
                 value = default
         result[key] = value
+    # Legacy 100-call limits stopped otherwise affordable long courses. The
+    # single user-facing limit is now the project budget; retain a high fuse.
+    result["max_calls"] = DEFAULTS["max_calls"]
     return result
 
 
@@ -132,11 +135,19 @@ class SettingsDialog(QDialog):
         allow.setToolTip("包括转写、公式候选的文本和课程术语。原始视频不会自动上传。")
         self.fields["allow_text_api"] = allow
         form.addRow(allow)
-        self._number(form, "budget_cny", "项目 API 预算（元）", 0.01, 100000, 2)
-        self._number(form, "max_calls", "最多 API 调用次数", 1, 100000)
-        self._number(form, "input_price_per_million", "输入估价（元 / 百万 token）", 0, 10000, 4)
-        self._number(form, "output_price_per_million", "输出估价（元 / 百万 token）", 0, 10000, 4)
-        explanation = QLabel("API 任务由你点击后运行。未授权时不会发送文本；未勾选保存时密钥仅留在本次会话。价格由你按账户计费规则填写，用量为估算，以服务商账单为准。视觉截图和参考声音上传尚未开放。")
+        self._number(form, "budget_cny", "本项目最多花费（元）", 0.01, 100000, 2)
+        form.addRow(QLabel("断句、翻译和讲义共用这一预算，达到上限自动停止。"))
+        advanced_toggle = QCheckBox("高级：费用估算单价")
+        advanced = QWidget()
+        advanced_form = QFormLayout(advanced)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+        self._number(advanced_form, "input_price_per_million", "输入（元 / 百万 token）", 0.0001, 10000, 4)
+        self._number(advanced_form, "output_price_per_million", "输出（元 / 百万 token）", 0.0001, 10000, 4)
+        advanced.hide()
+        advanced_toggle.toggled.connect(advanced.setVisible)
+        form.addRow(advanced_toggle)
+        form.addRow(advanced)
+        explanation = QLabel("API 自动完成断句、翻译和讲义整理，无需逐句填写。未勾选保存时密钥仅留在本次会话。费用根据高级设置中的单价估算，以服务商账单为准。")
         explanation.setWordWrap(True)
         explanation.setObjectName("notice")
         form.addRow(explanation)
@@ -233,4 +244,5 @@ class SettingsDialog(QDialog):
             else:
                 result[key] = widget.text().strip()
         result["allow_image_api"] = False
+        result["max_calls"] = DEFAULTS["max_calls"]
         return result

@@ -297,3 +297,11 @@ def test_pdf_embedded_chinese_and_formula(lesson, tmp_path):
     assert "revision 1" in text
     assert list((tmp_path / "handout-formulas").glob("*.svg"))
     assert list((tmp_path / "handout-formulas").glob("*.tex"))
+
+
+def test_pdf_preserves_unicode_minus_instead_of_silently_dropping_it(lesson, tmp_path):
+    from pypdf import PdfReader
+    lesson["notes"][0].update(body="方程 2x−y=0 和 −x+2y=3 保留负号。", formula_ids=[])
+    output = export_handout(lesson, tmp_path/"signs.pdf")
+    text = "".join(page.extract_text() for page in PdfReader(output).pages)
+    assert "2x−y=0" in text and "−x+2y=3" in text

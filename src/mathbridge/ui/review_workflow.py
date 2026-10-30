@@ -34,7 +34,7 @@ def review_guidance(project, settings, *, busy=False, dirty=False):
         if obsolete_count:
             step(3, "修复旧版误识别公式", f"发现 {obsolete_count} 项旧版规则将单词末尾误认作公式。清除后只需重新翻译受影响的句子，其余译文会保留。", "repair_formulas", f"清除 {obsolete_count} 项误识别")
         elif missing and provider == "manual":
-            step(2, "填写字幕译文", "选中一句，在右侧填写目标字幕。普通句子的译文和配音读法会一起保存；也可在设置中开启自动翻译。", "review", "填写下一句字幕")
+            step(2, "开启 AI 断句与翻译", "在处理设置中选择文本 API 并填写密钥，AI 会整理断句并翻译，无需逐句填写。", "configure_translation", "设置 AI 处理")
         elif missing:
             if provider == "offline":
                 try:
@@ -46,9 +46,11 @@ def review_guidance(project, settings, *, busy=False, dirty=False):
                 ready = provider == "deepseek" and bool(settings.get("api_key")) and bool(settings.get("allow_text_api")) and bool(settings.get("model"))
             if ready:
                 partial = missing_count < len(segments)
-                step(2, "补齐缺失译文" if partial else "生成字幕译文", f"仅生成 {missing_count} 句缺失的字幕与配音读法，其余译文保留。" if partial else "自动整理数学内容并生成字幕与配音读法。完成后可优先检查问题句。", "translate_missing" if partial else "prepare_translation", f"补齐 {missing_count} 句译文" if partial else "生成字幕译文")
+                organized = all(s["id"].startswith("sentence-") for s in segments)
+                resume = partial or organized
+                step(2, "补齐缺失译文" if resume else "AI 断句并翻译", f"仅补齐 {missing_count} 句译文，其余保留。需要优化全课断句时，点击“AI 重新断句并翻译”。" if resume else "AI 先合并碎句、合理拆分长句，再生成字幕与配音读法。无需逐句填写。", "translate_missing" if resume else "prepare_translation", f"补齐 {missing_count} 句译文" if resume else "AI 断句并翻译")
             else:
-                step(2, "选择翻译方式", "可以直接手动填写字幕，或到设置中配置自动翻译所需的服务与文本许可。", "configure_translation", "设置翻译方式")
+                step(2, "设置 AI 处理", "配置文本 API、密钥和课程文本许可后，即可自动断句与翻译。", "configure_translation", "设置 AI 处理")
         else:
             pending = f"另有 {formulas} 个公式需在问题列表中检查或保留原始证据。" if formulas else ""
             step(4, "字幕译文已就绪", "可以直接生成配音，逐句确认属于可选校对。优先处理问题列表中的缺失内容和配音时间问题。" + pending, "go_dub", "下一步：去配音")

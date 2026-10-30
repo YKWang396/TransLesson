@@ -29,7 +29,7 @@ class Coordinator(QObject):
         self.project_dir = None
         self.busy = False
         self.settings = dict(text_provider="deepseek", model="deepseek-flash", api_base="https://api.deepseek.com",
-                             allow_text_api=False, allow_image_api=False, budget_cny=5.0, max_calls=100,
+                             allow_text_api=False, allow_image_api=False, budget_cny=5.0, max_calls=10000,
                              input_price_per_million=2.0, output_price_per_million=8.0, voice="", speech_rate=0)
         self._process = None
         self._buffer = b""
@@ -455,13 +455,13 @@ class Coordinator(QObject):
                 raise ValueError("已有任务运行")
             if not self.project or not self.project["segments"]:
                 raise ValueError("请先生成原文或导入字幕")
-            self._pipeline = ["translate"]
-            self._start("analyze", options or {})
+            self._pipeline = ["analyze", "translate"]
+            self._start("sentences", options or {})
             return
         if stage == "pipeline":
             if self.busy:
                 raise ValueError("已有任务运行")
-            self._pipeline = (["diarize"] if self.settings.get("diarization_enabled") else []) + ["analyze", "translate", "dub", "notes"]
+            self._pipeline = (["diarize"] if self.settings.get("diarization_enabled") else []) + ["sentences", "analyze", "translate", "notes", "dub"]
             self._start("transcribe" if not self.project or not self.project["segments"] else self._pipeline.pop(0), options or {})
             return
         self._pipeline = []
@@ -580,7 +580,7 @@ class Coordinator(QObject):
             return
         result = message["result"]
         snapshot = self._command["project"]
-        content_stages = {"transcribe", "import_subtitles", "diarize", "analyze", "translate", "notes"}
+        content_stages = {"transcribe", "import_subtitles", "diarize", "sentences", "analyze", "translate", "notes"}
         # Edits in any text field already incremented revision, even without review confirmation.
         stale = stage in content_stages and (self._editor_dirty or not self.project or self.project["revision"] != self._command["project_revision"])
         store = ProjectStore(self._command["project_dir"])

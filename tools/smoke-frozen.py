@@ -30,7 +30,7 @@ def main():
     assert screenshot.is_file() and screenshot.stat().st_size > 5000
     results = []
     artifacts = []
-    for stage, options in [('frame', {'time_ms': 2000}), ('notes', {}), ('dub', {}),
+    for stage, options in [('frame', {'time_ms': 2000}), ('dub', {}),
                            ('export', {'formats': ['srt', 'vtt', 'pdf', 'video', 'wav'], 'background': 'dub_only'})]:
         command = {'type': 'command', 'request_id': 'req-frozen-' + uuid.uuid4().hex,
                    'stage': stage, 'project_dir': str(project_dir), 'project': project,

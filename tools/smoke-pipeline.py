@@ -90,7 +90,15 @@ def main():
         perform(coordinator, lambda: coordinator.run_stage("dub"))
         preview = perform(coordinator, lambda: coordinator.run_stage("preview"))
         assert any(Path(p).suffix == '.mp4' for p in preview['outputs'])
-        perform(coordinator, lambda: coordinator.run_stage("notes"))
+        # This offline media test supplies its teaching note as a fixture. Real
+        # AI generation is covered separately by the opt-in qa-course-ai tool.
+        previous = json.loads(json.dumps(coordinator.project))
+        candidate = json.loads(json.dumps(previous))
+        current_segment = coordinator.project["segments"][0]
+        candidate["notes"] = [dict(id="note-qa", kind="course", heading="测试课程小节", body=current_segment["target_text"],
+                                   segment_ids=["seg-1"], formula_ids=current_segment["formula_ids"], review="confirmed")]
+        candidate["revision"] += 1
+        coordinator._save_edit(candidate, previous)
         result = perform(coordinator, lambda: coordinator.run_stage("export", {"formats": ["srt", "vtt", "ass", "pdf", "video", "wav", "markdown", "json"], "background": "dub_only"}))
         plan_path = next(Path(p) for p in result["outputs"] if Path(p).name == "render-plan.json")
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
