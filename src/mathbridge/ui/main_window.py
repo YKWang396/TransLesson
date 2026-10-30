@@ -846,14 +846,26 @@ class MainWindow(QMainWindow):
         if not speaker:
             self._show_error("请先选择一位说话人。")
             return
-        segment = self._segment(self._segment_id)
-        if not segment or segment.get("speaker_id") != identifier:
-            segment = next((s for s in self._project.get("segments", []) if s.get("speaker_id") == identifier), None)
-        reference = (segment["start_ms"], min(segment["end_ms"], segment["start_ms"] + 10000)) if segment else None
+        from mathbridge.application.reference import load_reference_words, reference_for_range, suggest_reference
+        words=load_reference_words(self._project,self.coordinator.project_dir)
+        segment=self._segment(self._segment_id)
+        preferred=segment["id"] if segment and segment["speaker_id"]==identifier else None
+        reference=suggest_reference(self._project,identifier,words,preferred)
         dialog = SpeakerDialog(speaker, self._project.get("languages", {}).get("source", "en"),
-                               self._project.get("source", {}).get("duration_ms", 0), reference, self)
+                               self._project.get("source", {}).get("duration_ms", 0), reference, self,
+                               reference_lookup=lambda a,b:reference_for_range(self._project,identifier,a,b,words),
+                               replay_reference=self._replay_reference_range)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._call("update_speaker", identifier, dialog.changes())
+        self.player.pause()
+
+    def _replay_reference_range(self,start,end):
+        if not Path(self.coordinator.source_path).is_file():
+            self._show_error("请先重连原视频，再试听参考原声。");return
+        self.dub_player.pause()
+        self._playback_stop_ms=end
+        self.player.setPosition(start)
+        self.player.play()
 
     def _preview_speaker_reference(self):
         identifier = self._selected_speaker_id()

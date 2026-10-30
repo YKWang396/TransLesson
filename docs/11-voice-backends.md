@@ -1,6 +1,6 @@
 # 多人原声配音与本地声音服务
 
-更新日期：2026-10-30。
+更新日期：2026-10-31。
 
 配音默认自动匹配节奏，通常无需预设整体速度；剩余问题可集中试听。操作与边界见 [自动节奏配音](14-adaptive-dubbing.md)。
 
@@ -8,13 +8,13 @@
 
 参考原声配音使用每位说话人的原视频片段作为声音参考，再生成目标语言的讲话。英语参考音频可以用于生成中文配音，中文参考音频也可以用于生成英语配音。音色相似度取决于参考录音、模型及译文的读法，需要试听后确认。Windows 系统声音仍可用于不需要模仿音色的项目。
 
-MathBridge 提供 GPT-SoVITS `api_v2.py` 的本机客户端。**GPT-SoVITS 服务与模型不包含在 MathBridge 便携包中，需要另外准备并启动。** 本次没有下载大型声音模型，也没有对真实老师的音色相似度做验收。
+课译 TransLesson 提供 GPT-SoVITS `api_v2.py` 的本机客户端。**GPT-SoVITS 服务与模型不包含在 课译 TransLesson 便携包中，需要另外准备并启动。** 当前本机已用 v2ProPlus 与自动选取的英语原声成功生成中文样例；音色相似度及整课听感仍需试听。自动参考和原生启动命令见 [自动参考声音说明](16-auto-voice-reference.md)。
 
 ### 1. 准备服务
 
-从 [GPT-SoVITS 官方项目](https://github.com/RVC-Boss/GPT-SoVITS) 获取 Windows 整合包，或按[官方中文安装说明](https://github.com/RVC-Boss/GPT-SoVITS/blob/main/docs/cn/README.md)安装独立环境。请将该环境放在单独文件夹；MathBridge 自带的 Python 环境用于桌面程序，不承担 GPT-SoVITS 的 PyTorch 环境。
+从 [GPT-SoVITS 官方项目](https://github.com/RVC-Boss/GPT-SoVITS) 获取 Windows 整合包，或按[官方中文安装说明](https://github.com/RVC-Boss/GPT-SoVITS/blob/main/docs/cn/README.md)安装独立环境。请将该环境放在单独文件夹；课译 TransLesson 自带的 Python 环境用于桌面程序，不承担 GPT-SoVITS 的 PyTorch 环境。
 
-下载并准备与所选版本匹配的 GPT、SoVITS、中文文本前端及语音特征模型；官方说明中的预训练模型目录是 `GPT_SoVITS/pretrained_models`。模型版本和文件名会变化，应以当前使用的服务版本配置为准。首先在 GPT-SoVITS 自带界面确认中英文推理正常，再连接 MathBridge。
+下载并准备与所选版本匹配的 GPT、SoVITS、中文文本前端及语音特征模型；官方说明中的预训练模型目录是 `GPT_SoVITS/pretrained_models`。模型版本和文件名会变化，应以当前使用的服务版本配置为准。首先在 GPT-SoVITS 自带界面确认中英文推理正常，再连接 课译 TransLesson。
 
 编辑 GPT-SoVITS 的 `GPT_SoVITS/configs/tts_infer.yaml`，核对 `custom` 下的模型文件路径及版本。CPU 环境使用 `device: cpu`、`is_half: false`；使用 NVIDIA 显卡时，应按该服务自己的安装说明准备匹配的 PyTorch/CUDA 环境并配置设备。不要直接沿用示例配置中的 CUDA 设置。
 
@@ -30,27 +30,27 @@ python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 .\runtime\python.exe -I api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-服务启动后保持运行。只打开 WebUI 不等于启动了 `api_v2.py` 服务。默认连接地址为 `http://127.0.0.1:9880`，地址末尾带 `/tts` 也可。MathBridge 只允许本机回环 HTTP 地址，不跟随重定向，也不使用系统代理。
+服务启动后保持运行。只打开 WebUI 不等于启动了 `api_v2.py` 服务。默认连接地址为 `http://127.0.0.1:9880`，地址末尾带 `/tts` 也可。课译 TransLesson 只允许本机回环 HTTP 地址，不跟随重定向，也不使用系统代理。
 
 ### 2. 为每人选取参考原声
 
-每位说话人应使用自己的 **3–10 秒 PCM WAV**，建议选择 4–8 秒连续说话、音量正常且没有其他人抢话的片段。参考原文须准确对应这段音频，参考语言选择音频实际语言。背景音乐、混响、嘈杂和多人重叠会降低音色匹配效果。
+在“03 配音 → 配置选中说话人”会自动带入参考原声时间、对应原话和语言；也可点击“自动选取并填写”重新选择。每位说话人使用自己的 **3–10 秒 PCM WAV**，建议选择 4–8 秒连续说话、音量正常且没有其他人抢话的片段。参考原文须准确对应这段音频，参考语言选择音频实际语言。背景音乐、混响、嘈杂和多人重叠会降低音色匹配效果。
 
 例如，老师使用一段英语讲解作为参考，学生使用一段自己的英语提问作为参考；给老师和学生的中文译文分别调用配音时，传入各自的参考音频和原文。不要将两人的声音混在同一个参考片段中。
 
-当前客户端要求服务与 MathBridge 运行在同一台电脑，因为服务读取传入的绝对参考文件路径。Docker、WSL 或另一台机器无法直接读取 Windows 工程路径时，需要先解决路径挂载；当前客户端不代做跨环境路径转换。
+当前客户端要求服务与 课译 TransLesson 运行在同一台电脑，因为服务读取传入的绝对参考文件路径。Docker、WSL 或另一台机器无法直接读取 Windows 工程路径时，需要先解决路径挂载；当前客户端不代做跨环境路径转换。
 
 ### 3. 连接检查与异常处理
 
 连接检查读取本地 FastAPI 的 `/openapi.json`，确认存在 `POST /tts`；这只能证明接口可访问，不能代替实际试听。客户端向 `/tts` 发送目标读法、目标语言、参考 WAV 路径、参考原文与参考语言，并要求非流式 WAV 响应，协议见[官方 API 源码](https://github.com/RVC-Boss/GPT-SoVITS/blob/main/api_v2.py)。
 
-返回音频经过格式、长度和完整性检查后才原子保存；JSON 错误、无效音频和超时不会替换已有的成功结果。取消操作会立即停止客户端等待并阻止迟到结果写入工程；独立的 GPT-SoVITS 服务可能仍在计算该请求，需要在服务控制台观察。MathBridge 不会自动重试生成，也不会自动切换成另一种声音。
+返回音频经过格式、长度和完整性检查后才原子保存；JSON 错误、无效音频和超时不会替换已有的成功结果。取消操作会立即停止客户端等待并阻止迟到结果写入工程；独立的 GPT-SoVITS 服务可能仍在计算该请求，需要在服务控制台观察。课译 TransLesson 不会自动重试生成，也不会自动切换成另一种声音。
 
-服务端切换模型后，应同步更改 MathBridge 的声音模型标识，避免把旧模型生成的音频当成新结果复用。模型标识是缓存区分信息，不会让客户端远程切换服务端权重。
+服务端切换模型后，应同步更改 课译 TransLesson 的声音模型标识，避免把旧模型生成的音频当成新结果复用。模型标识是缓存区分信息，不会让客户端远程切换服务端权重。
 
 ## 验证范围
 
-客户端测试覆盖了真实本机 HTTP 请求、跨语言参数、有效 PCM WAV、服务错误、禁止远程地址和重定向、等待响应时取消、超时，以及无效输出保留旧文件。本轮没有安装或启动真实 GPT-SoVITS 大模型，因此没有将声音相似度、速度或显存占用列为已验证结果。
+客户端测试覆盖了真实本机 HTTP 请求、跨语言参数、有效 PCM WAV、服务错误、禁止远程地址和重定向、等待响应时取消、超时，以及无效输出保留旧文件。现已用本机真实 v2ProPlus 服务完成英语参考到中文样例的推理测试；单个样例不能代替音色相似度、整课自然度或吞吐量评测。
 
 ## 本地多人说话人区分：sherpa-onnx
 
@@ -58,7 +58,7 @@ python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 
 本功能使用 CPU ONNX 推理，不需要 CUDA，也不需要 Hugging Face Token。需要两个独立模型：Pyannote 分段模型与 NeMo Titanet small 声线特征模型。下载来源、用法及模型许可请参看 [sherpa-onnx 官方模型说明](https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/models.html)。它们与 Whisper 模型用途不同，不能将 Whisper 模型目录填到说话人设置中。
 
-在 MathBridge 源码根目录打开 PowerShell，运行：
+在 课译 TransLesson 源码根目录打开 PowerShell，运行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install ".[diarization]"

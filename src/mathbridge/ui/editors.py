@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
@@ -90,7 +90,7 @@ class TermDialog(QDialog):
 
 class SpeakerDialog(QDialog):
     def __init__(self, speaker, source_language="en", duration_ms=0,
-                 default_reference=None, parent=None):
+                 default_reference=None, parent=None, *, reference_lookup=None, replay_reference=None):
         super().__init__(parent)
         self.setWindowTitle("说话人与声音 · " + speaker.get("label", speaker["id"]))
         self.setMinimumWidth(590)
@@ -105,6 +105,11 @@ class SpeakerDialog(QDialog):
         self.provider.addItem("Windows 系统声音", "windows")
         self.provider.addItem("参考原声音色 · 本地 GPT-SoVITS", "gpt_sovits")
         profile = speaker.get("voice_profile") or {}
+        self._reference_suggestion = default_reference if isinstance(default_reference,dict) else None
+        self._reference_lookup = reference_lookup
+        self._reference_replay = replay_reference
+        self._setting_reference = False
+        saved_reference = bool(profile.get("reference_text","").strip()) and all(k in profile for k in ("reference_start_ms","reference_end_ms"))
         provider = profile.get("provider", "gpt_sovits" if speaker.get("voice_mode") == "reference" else "windows")
         self.provider.setCurrentIndex(max(0, self.provider.findData(provider)))
         form.addRow("配音方式", self.provider)
@@ -119,13 +124,15 @@ class SpeakerDialog(QDialog):
         reference_form = QFormLayout(self.reference_group)
         reference_form.setContentsMargins(0, 0, 0, 0)
         reference_form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        hint = QLabel("从原视频选择 3–10 秒清晰、仅该人讲话的片段，并准确填写这段原话。参考声音会交给已启动的本机 GPT-SoVITS 服务，需另行准备其模型。")
+        hint = QLabel("根据已识别的原文，自动带入同一说话人的 3–10 秒参考时间、原话和语言。请回听确认；生成配音时会自动提取音频，无需另做 WAV。")
         hint.setWordWrap(True)
         hint.setMaximumHeight(100)
         hint.setObjectName("notice")
         reference_form.addRow(hint)
         evidence = speaker.get("reference_evidence") or {}
-        default_start, default_end = default_reference or (0, min(6000, duration_ms or 6000))
+        proposal = self._reference_suggestion if not saved_reference else None
+        default_start, default_end = ((proposal["start_ms"],proposal["end_ms"]) if proposal else
+            (default_reference if isinstance(default_reference,(tuple,list)) else (0,min(6000,duration_ms or 6000))))
         self.reference_start = QDoubleSpinBox()
         self.reference_end = QDoubleSpinBox()
         for spin in (self.reference_start, self.reference_end):
@@ -133,14 +140,14 @@ class SpeakerDialog(QDialog):
             spin.setRange(0, duration_ms / 1000 if duration_ms else 999999)
             spin.setSingleStep(0.1)
             spin.setSuffix(" s")
-        self.reference_start.setValue(profile.get("reference_start_ms", evidence.get("start_ms", default_start)) / 1000)
-        self.reference_end.setValue(profile.get("reference_end_ms", evidence.get("end_ms", default_end)) / 1000)
+        self.reference_start.setValue((default_start if proposal else profile.get("reference_start_ms", evidence.get("start_ms", default_start))) / 1000)
+        self.reference_end.setValue((default_end if proposal else profile.get("reference_end_ms", evidence.get("end_ms", default_end))) / 1000)
         reference_form.addRow("参考原声起点", self.reference_start)
         reference_form.addRow("参考原声终点", self.reference_end)
         self.reference_language = QComboBox()
         self.reference_language.addItem("英语", "en")
         self.reference_language.addItem("中文", "zh")
-        reference_language = str(profile.get("reference_language", source_language)).split("-")[0]
+        reference_language = str(proposal["reference_language"] if proposal else profile.get("reference_language", source_language)).split("-")[0]
         self.reference_language.setCurrentIndex(max(0, self.reference_language.findData(reference_language)))
         reference_form.addRow("参考原声语言", self.reference_language)
         self.clone_speed = QDoubleSpinBox()
@@ -158,10 +165,33 @@ class SpeakerDialog(QDialog):
         speed_advanced.toggled.connect(speed_row.setVisible)
         speed_advanced.setChecked(self.clone_speed.value()!=1)
         speed_row.setVisible(speed_advanced.isChecked())
-        self.reference_text = QPlainTextEdit(profile.get("reference_text", ""))
+        self.reference_text = QPlainTextEdit(proposal["reference_text"] if proposal else profile.get("reference_text", ""))
         self.reference_text.setPlaceholderText("填写参考片段中实际说出的原话，不是译文；不要包含公式 ID 占位符。")
         self.reference_text.setFixedHeight(100)
         reference_form.addRow("参考原话", self.reference_text)
+        reference_buttons=QWidget()
+        reference_row=QHBoxLayout(reference_buttons);reference_row.setContentsMargins(0,0,0,0)
+        self.auto_reference_button=QPushButton("自动选取并填写")
+        self.auto_reference_button.setEnabled(bool(self._reference_suggestion))
+        self.auto_reference_button.clicked.connect(self._fill_reference)
+        reference_row.addWidget(self.auto_reference_button)
+        self.replay_reference_button=QPushButton("回听这段原声")
+        self.replay_reference_button.setEnabled(replay_reference is not None)
+        self.replay_reference_button.clicked.connect(self._replay_reference)
+        reference_row.addWidget(self.replay_reference_button)
+        reference_form.addRow(reference_buttons)
+        self.reference_notice=QLabel("已保留保存过的参考片段和原话。" if saved_reference else
+            "已根据课程原文自动填写，可直接回听检查。" if proposal else
+            "未找到可可靠匹配的 3–10 秒片段。请先转写原文，或自行选择片段并填写原话。")
+        self.reference_notice.setWordWrap(True)
+        reference_form.addRow(self.reference_notice)
+        self._reference_timer=QTimer(self)
+        self._reference_timer.setSingleShot(True)
+        self._reference_timer.setInterval(200)
+        self._reference_timer.timeout.connect(self._sync_reference_text)
+        self.reference_start.valueChanged.connect(self._reference_time_changed)
+        self.reference_end.valueChanged.connect(self._reference_time_changed)
+        self.reference_text.textChanged.connect(self._reference_text_edited)
         self.authorized = QCheckBox("已取得该声音的使用授权")
         self.authorized.setChecked(bool(speaker.get("voice_authorized", False)))
         reference_form.addRow(self.authorized)
@@ -185,7 +215,49 @@ class SpeakerDialog(QDialog):
         self.windows_group.setVisible(not cloning)
         self.reference_group.setVisible(cloning)
 
+    def _fill_reference(self):
+        proposal=self._reference_suggestion
+        if not proposal:return
+        self._reference_timer.stop()
+        self._setting_reference=True
+        self.reference_start.setValue(proposal["start_ms"]/1000)
+        self.reference_end.setValue(proposal["end_ms"]/1000)
+        self.reference_text.setPlainText(proposal["reference_text"])
+        self.reference_language.setCurrentIndex(max(0,self.reference_language.findData(proposal["reference_language"])))
+        self._setting_reference=False
+        self.reference_notice.setText("已自动匹配原声时间和原话，请回听确认没有其他人抢话或转写错误。")
+
+    def _reference_time_changed(self,*_):
+        if not self._setting_reference and self._reference_lookup is not None:
+            self._reference_timer.start()
+
+    def _reference_text_edited(self):
+        if not self._setting_reference:
+            self._reference_timer.stop()  # Explicitly corrected text takes priority.
+
+    def _sync_reference_text(self):
+        if self._reference_lookup is None:return
+        start,end=round(self.reference_start.value()*1000),round(self.reference_end.value()*1000)
+        proposal=self._reference_lookup(start,end)
+        self._setting_reference=True
+        if proposal:
+            self.reference_text.setPlainText(proposal["reference_text"])
+            self.reference_language.setCurrentIndex(max(0,self.reference_language.findData(proposal["reference_language"])))
+            self.reference_notice.setText("已按新时间重新匹配原话。")
+        else:
+            self.reference_text.clear()
+            self.reference_notice.setText("这个时间段无法可靠对应完整原话。请自动选取，或回听后手动填写；已清除上个片段的文字。")
+        self._setting_reference=False
+
+    def _replay_reference(self):
+        if self._reference_replay is not None:
+            start,end=round(self.reference_start.value()*1000),round(self.reference_end.value()*1000)
+            if 0<=start<end:self._reference_replay(start,end)
+
     def accept(self):
+        if self._reference_timer.isActive():
+            self._reference_timer.stop()
+            self._sync_reference_text()
         if not self.speaker_label.text().strip():
             QMessageBox.warning(self, "说话人名称", "请填写说话人的显示名称。")
             return
