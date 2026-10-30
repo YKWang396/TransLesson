@@ -82,6 +82,20 @@ def validate_project(project: dict) -> None:
                 raise ValueError("VOICE_REFERENCE_INVALID: 请填写参考片段中实际说出的原文")
             if profile.get("reference_language") not in {"en", "zh", "zh-CN"}:
                 raise ValueError("VOICE_REFERENCE_INVALID: 请选择参考声音中实际使用的语言")
+            ranges = [(start,end)]
+            if any(s["speaker_id"] != speaker["id"] and s["start_ms"] < end and s["end_ms"] > start for s in project["segments"]):
+                raise ValueError("VOICE_REFERENCE_INVALID: 主参考包含其他说话人")
+            for reference in profile.get("auxiliary_references",[]):
+                a,b = reference["start_ms"],reference["end_ms"]
+                if not 0 <= a < b <= duration or not 3000 <= b-a <= 10000:
+                    raise ValueError("VOICE_REFERENCE_INVALID: 每段补充参考须为视频内 3–10 秒的单人语音")
+                if any(a < y and b > x for x,y in ranges):
+                    raise ValueError("VOICE_REFERENCE_INVALID: 参考片段不能重复或重叠")
+                if not reference["reference_text"].strip() or "{{" in reference["reference_text"]:
+                    raise ValueError("VOICE_REFERENCE_INVALID: 补充参考原话无效")
+                if any(s["speaker_id"] != speaker["id"] and s["start_ms"] < b and s["end_ms"] > a for s in project["segments"]):
+                    raise ValueError("VOICE_REFERENCE_INVALID: 补充参考包含其他说话人")
+                ranges.append((a,b))
         elif profile.get("provider", "windows") != "windows":
             raise ValueError("VOICE_PROFILE_INVALID: 标准声音应选择 Windows 声音")
     previous_end = 0
@@ -133,13 +147,19 @@ def speaker_voice(speaker: dict, settings: dict) -> dict:
     """Resolve one speaker without allowing another speaker's voice to leak in."""
     profile = speaker.get("voice_profile", {})
     if speaker["voice_mode"] == "reference":
-        return dict(provider="gpt_sovits", endpoint=settings.get("voice_clone_api_url", "http://127.0.0.1:9880"),
+        voice = dict(provider="gpt_sovits", endpoint=settings.get("voice_clone_api_url", "http://127.0.0.1:9880"),
                     model=settings.get("voice_clone_model", "default"),
                     reference_start_ms=profile.get("reference_start_ms"),
                     reference_end_ms=profile.get("reference_end_ms"),
                     reference_text=profile.get("reference_text", ""),
                     reference_language=profile.get("reference_language", ""),
                     speed=profile.get("speed", 1.0))
+        if profile.get("auxiliary_references"):
+            voice["auxiliary_references"] = profile["auxiliary_references"]
+        # The source-bandwidth reference is different from the old ASR WAV;
+        # old synthesized audio must not masquerade as a new voice trial.
+        voice["reference_audio_format"] = "original-32k-v1"
+        return voice
     return dict(provider="windows", voice=profile.get("voice_name") or settings.get("voice", ""),
                 rate=profile.get("speech_rate", settings.get("speech_rate", 0)), model="system-installed")
 

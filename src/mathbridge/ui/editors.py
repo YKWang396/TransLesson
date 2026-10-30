@@ -90,7 +90,7 @@ class TermDialog(QDialog):
 
 class SpeakerDialog(QDialog):
     def __init__(self, speaker, source_language="en", duration_ms=0,
-                 default_reference=None, parent=None, *, reference_lookup=None, replay_reference=None):
+                 default_reference=None, parent=None, *, reference_lookup=None, replay_reference=None, auxiliary_lookup=None):
         super().__init__(parent)
         self.setWindowTitle("说话人与声音 · " + speaker.get("label", speaker["id"]))
         self.setMinimumWidth(590)
@@ -108,6 +108,8 @@ class SpeakerDialog(QDialog):
         self._reference_suggestion = default_reference if isinstance(default_reference,dict) else None
         self._reference_lookup = reference_lookup
         self._reference_replay = replay_reference
+        self._auxiliary_lookup = auxiliary_lookup
+        self.auxiliary_references = [dict(r) for r in profile.get("auxiliary_references",[])]
         self._setting_reference = False
         saved_reference = bool(profile.get("reference_text","").strip()) and all(k in profile for k in ("reference_start_ms","reference_end_ms"))
         provider = profile.get("provider", "gpt_sovits" if speaker.get("voice_mode") == "reference" else "windows")
@@ -185,6 +187,25 @@ class SpeakerDialog(QDialog):
             "未找到可可靠匹配的 3–10 秒片段。请先转写原文，或自行选择片段并填写原话。")
         self.reference_notice.setWordWrap(True)
         reference_form.addRow(self.reference_notice)
+        self.use_auxiliary = QCheckBox("自动补充同一说话人的多段原声（最多 3 段）")
+        self.use_auxiliary.setChecked(bool(self.auxiliary_references) or bool(auxiliary_lookup and not saved_reference))
+        self.use_auxiliary.setEnabled(bool(auxiliary_lookup or self.auxiliary_references))
+        reference_form.addRow(self.use_auxiliary)
+        auxiliary_row = QWidget()
+        auxiliary_layout = QHBoxLayout(auxiliary_row);auxiliary_layout.setContentsMargins(0,0,0,0)
+        self.auxiliary_list = QComboBox()
+        self.auxiliary_list.setMinimumContentsLength(20)
+        self.auxiliary_list.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        auxiliary_layout.addWidget(self.auxiliary_list,1)
+        self.replay_auxiliary_button = QPushButton("回听补充原声")
+        self.replay_auxiliary_button.clicked.connect(self._replay_auxiliary)
+        auxiliary_layout.addWidget(self.replay_auxiliary_button)
+        reference_form.addRow(auxiliary_row)
+        auxiliary_hint=QLabel("主参考保留原话；补充片段用于合成时融合音色，不会训练或修改模型。多段效果请通过试听比较。")
+        auxiliary_hint.setWordWrap(True)
+        reference_form.addRow(auxiliary_hint)
+        self.use_auxiliary.toggled.connect(self._update_auxiliaries)
+        self._update_auxiliaries(refresh=not bool(self.auxiliary_references))
         self._reference_timer=QTimer(self)
         self._reference_timer.setSingleShot(True)
         self._reference_timer.setInterval(200)
@@ -226,6 +247,23 @@ class SpeakerDialog(QDialog):
         self.reference_language.setCurrentIndex(max(0,self.reference_language.findData(proposal["reference_language"])))
         self._setting_reference=False
         self.reference_notice.setText("已自动匹配原声时间和原话，请回听确认没有其他人抢话或转写错误。")
+        self._update_auxiliaries()
+
+    def _update_auxiliaries(self,*_,refresh=True):
+        if self.use_auxiliary.isChecked() and refresh and self._auxiliary_lookup:
+            self.auxiliary_references=self._auxiliary_lookup(round(self.reference_start.value()*1000),round(self.reference_end.value()*1000))
+        self.auxiliary_list.clear()
+        for r in self.auxiliary_references if self.use_auxiliary.isChecked() else []:
+            self.auxiliary_list.addItem(f"{r['start_ms']/1000:.2f}–{r['end_ms']/1000:.2f} 秒 · {r['reference_text']}",r)
+        if not self.auxiliary_list.count():
+            self.auxiliary_list.addItem("未启用补充参考" if not self.use_auxiliary.isChecked() else "没有其他可靠的同人片段")
+        self.replay_auxiliary_button.setEnabled(bool(self.auxiliary_list.currentData()) and self._reference_replay is not None)
+        self._auxiliary_primary_range=(round(self.reference_start.value()*1000),round(self.reference_end.value()*1000))
+
+    def _replay_auxiliary(self):
+        r=self.auxiliary_list.currentData()
+        if r and self._reference_replay:
+            self._reference_replay(r["start_ms"],r["end_ms"])
 
     def _reference_time_changed(self,*_):
         if not self._setting_reference and self._reference_lookup is not None:
@@ -248,6 +286,7 @@ class SpeakerDialog(QDialog):
             self.reference_text.clear()
             self.reference_notice.setText("这个时间段无法可靠对应完整原话。请自动选取，或回听后手动填写；已清除上个片段的文字。")
         self._setting_reference=False
+        self._update_auxiliaries()
 
     def _replay_reference(self):
         if self._reference_replay is not None:
@@ -258,6 +297,8 @@ class SpeakerDialog(QDialog):
         if self._reference_timer.isActive():
             self._reference_timer.stop()
             self._sync_reference_text()
+        if self._auxiliary_primary_range != (round(self.reference_start.value()*1000),round(self.reference_end.value()*1000)):
+            self._update_auxiliaries()
         if not self.speaker_label.text().strip():
             QMessageBox.warning(self, "说话人名称", "请填写说话人的显示名称。")
             return
@@ -285,6 +326,8 @@ class SpeakerDialog(QDialog):
                 reference_language=self.reference_language.currentData(),
                 speed=self.clone_speed.value(),
             )
+            if self.use_auxiliary.isChecked() and self.auxiliary_references:
+                profile["auxiliary_references"]=[dict(r) for r in self.auxiliary_references]
         else:
             profile["voice_name"] = self.voice_name.text().strip()
         return {"label": self.speaker_label.text().strip(),

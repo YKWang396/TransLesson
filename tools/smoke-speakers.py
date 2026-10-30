@@ -78,7 +78,7 @@ def protocol_stub(project_dir):
                 assert payload["streaming_mode"] is False
                 assert payload["media_type"] == "wav"
                 with wave.open(str(reference), "rb") as audio:
-                    assert (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) == (1, 2, 16000)
+                    assert (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) == (1, 2, 32000)
                     duration = audio.getnframes() / audio.getframerate()
                     assert duration == 4.0
                     samples = audio.readframes(audio.getnframes())

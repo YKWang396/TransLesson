@@ -8,7 +8,7 @@ using System.Text;
 [assembly: AssemblyTitle("课译 TransLesson")]
 [assembly: AssemblyProduct("课译 TransLesson")]
 [assembly: AssemblyDescription("课译 TransLesson 工作目录启动入口")]
-[assembly: AssemblyVersion("0.1.7.0")]
+[assembly: AssemblyVersion("0.1.8.0")]
 
 internal static class WorkspaceLauncher
 {

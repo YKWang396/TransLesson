@@ -224,13 +224,16 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                     raise ValueError("STALE_AUDIO: 请先生成这句自然配音，再试听调整结果")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 if voice["provider"] == "gpt_sovits":
-                    from mathbridge.application.voices import prepare_reference
+                    from mathbridge.application.voices import prepare_reference, prepare_auxiliary_references
                     from mathbridge.providers.tts.gpt_sovits import synthesize
                     if speaker["id"] not in references:
-                        references[speaker["id"]] = prepare_reference(project, speaker, root, source_audio(), cancel)
-                    synthesize(segment["tts_text"], project["languages"]["target"], references[speaker["id"]],
+                        reference_args=dict(source_media=source,media_engine=engine())
+                        references[speaker["id"]] = (prepare_reference(project,speaker,root,source_audio(),cancel,**reference_args),
+                            prepare_auxiliary_references(project,speaker,root,source_audio(),cancel,**reference_args))
+                    reference, auxiliary = references[speaker["id"]]
+                    synthesize(segment["tts_text"], project["languages"]["target"], reference,
                                voice["reference_text"], voice["reference_language"], dest, endpoint=voice["endpoint"],
-                               speed=voice["speed"], cancel=cancel)
+                               speed=voice["speed"], cancel=cancel,auxiliary_reference_audio=auxiliary)
                 else:
                     from mathbridge.providers.tts.windows import synthesize
                     synthesize(segment["tts_text"], project["languages"]["target"], voice["voice"], dest,
@@ -255,7 +258,8 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                 return dict(artifacts=artifacts,outputs=[str(sample)],metadata=dict(sample=True,timing_sample=True,speaker_id=s["speaker_id"]))
             return dict(artifacts=artifacts, outputs=outputs, metadata=dict(speaker_id=segments[0]["speaker_id"], sample=True))
         all_segments = sorted(project["segments"], key=lambda item: item["start_ms"])
-        boundaries = {s["id"]: dict(index=i + 1, limit_end_ms=all_segments[i + 1]["start_ms"]
+        boundaries = {s["id"]: dict(index=i + 1, limit_start_ms=all_segments[i-1]["end_ms"] if i else 0,
+                      limit_end_ms=all_segments[i + 1]["start_ms"]
                       if i + 1 < len(all_segments) else project["source"]["duration_ms"])
                       for i, s in enumerate(all_segments)}
         clips = [dict(path=str(safe_path(root, a["path"])), start_ms=s["start_ms"], end_ms=s["end_ms"],

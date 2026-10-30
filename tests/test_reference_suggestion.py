@@ -1,7 +1,7 @@
 import copy
 import json
 
-from mathbridge.application.reference import load_reference_words,reference_for_range,suggest_reference
+from mathbridge.application.reference import load_reference_words,reference_for_range,suggest_reference,suggest_auxiliary_references
 
 
 def project(segments,language="en"):
@@ -11,6 +11,22 @@ def project(segments,language="en"):
 def segment(identifier,start,end,text,speaker="teacher"):
     return dict(id=identifier,start_ms=start,end_ms=end,source_text=text,speaker_id=speaker,
                 target_text="这是译文，不是参考原话。",subtitle_plain="译文")
+
+
+def test_auxiliary_references_remain_distinct_and_within_one_speaker():
+    p=project([segment(str(i),i*10000,i*10000+6000,f"This is complete source sentence {i}.",
+                       "student" if i==3 else "teacher") for i in range(6)])
+    before=copy.deepcopy(p)
+    primary=suggest_reference(p,"teacher")
+    auxiliary=suggest_auxiliary_references(p,"teacher",primary=primary)
+    assert len(auxiliary)==3 and p==before
+    ranges=[(primary['start_ms'],primary['end_ms'])]
+    for r in auxiliary:
+        assert r['reference_text'].startswith('This is complete source')
+        assert r['start_ms']!=30000
+        assert all(r['end_ms']<=a or r['start_ms']>=b for a,b in ranges)
+        ranges.append((r['start_ms'],r['end_ms']))
+    assert not suggest_auxiliary_references(p,"teacher",count=0)
 
 
 def test_prefills_original_text_time_and_language_without_mutating_project():

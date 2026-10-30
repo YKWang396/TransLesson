@@ -85,7 +85,20 @@
         "reference_start_ms": {"type": "integer", "minimum": 0},
         "reference_end_ms": {"type": "integer", "minimum": 0},
         "reference_text": {"type": "string"},
-        "reference_language": {"enum": ["en", "zh", "zh-CN"]}
+        "reference_language": {"enum": ["en", "zh", "zh-CN"]},
+        "auxiliary_references": {
+          "type": "array", "maxItems": 3,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["start_ms", "end_ms", "reference_text", "reference_language"],
+            "properties": {
+              "start_ms": {"type": "integer", "minimum": 0},
+              "end_ms": {"type": "integer", "minimum": 0},
+              "reference_text": {"type": "string", "minLength": 1},
+              "reference_language": {"enum": ["en", "zh", "zh-CN"]}
+            }
+          }
+        }
       }
     },
     "term": {

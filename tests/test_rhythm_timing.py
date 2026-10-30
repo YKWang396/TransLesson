@@ -36,7 +36,8 @@ def test_shares_time_without_merging_text_or_crossing_speakers():
 def test_rejects_dense_speech_instead_of_allowing_unbounded_drift():
     clips=[clip("a",0,500,6000),clip("b",600,1500,6000),clip("c",1600,2000,6000)]
     _,issues=plan_alignment(clips,10000)
-    assert len(issues)==3
+    assert [i["segment_id"] for i in issues]==["a","b"]
+    # The last sentence can now use the real long pause at the end of the video.
 
 
 def test_partial_audio_cannot_borrow_time_across_an_omitted_sentence():
@@ -46,6 +47,33 @@ def test_partial_audio_cannot_borrow_time_across_an_omitted_sentence():
     _,issues=plan_alignment([a,b],5000)
     assert issues[0]["segment_id"]=="a"
     assert issues[0]["available_end_ms"]==700
+
+
+def test_uses_both_sides_of_long_silence_without_double_spending_it():
+    clips=[clip("a",3000,4000,6000),clip("b",10000,11000,6500)]
+    before=copy.deepcopy(clips)
+    plans,issues=plan_alignment(clips,15000)
+    assert not issues and all(p["speed"]==1 for p in plans)
+    assert plans[0]["aligned_start_ms"]<3000
+    assert plans[0]["available_end_ms"]>6000  # Beyond the old two-second cap.
+    assert plans[1]["aligned_start_ms"]<10000
+    assert plans[0]["available_end_ms"]<=plans[1]["aligned_start_ms"]
+    assert clips==before
+
+
+def test_partial_clip_cannot_use_missing_previous_speech():
+    item=clip("a",5000,5500,3500);item["limit_start_ms"]=4900;item["limit_end_ms"]=6000
+    plans,issues=plan_alignment([item],10000)
+    assert issues and plans[0]["aligned_start_ms"]>=4900 and plans[0]["available_end_ms"]<=6000
+
+
+def test_one_impossible_clip_does_not_disable_sharing_for_its_neighbors():
+    clips=[clip('a',0,500,1200),clip('b',600,3000,1200),clip('bad',3200,3300,7000),
+           clip('d',4000,4500,1000),clip('e',4600,7000,1000)]
+    plans,issues=plan_alignment(clips,7500)
+    assert [i['segment_id'] for i in issues]==['bad']
+    assert [p['segment_id'] for p in plans]==[c['segment_id'] for c in clips]
+    assert plans[0]['speed']==1 and plans[1]['aligned_start_ms']>=1200
 
 
 def test_adaptive_schedules_preserve_order_bounds_and_codec_headroom():

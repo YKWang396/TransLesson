@@ -190,6 +190,7 @@ def capabilities():
     """Describe the adapter; this does not claim a running/installed backend."""
     return {"provider": "gpt-sovits", "languages": ["en", "zh"],
             "cross_language_reference": True, "reference_duration_seconds": [3, 10],
+            "maximum_auxiliary_references": 3,
             "audio_formats": ["wav"], "requires_local_service": True,
             "model_bundled": False, "cancellation": "client_socket"}
 
@@ -215,7 +216,7 @@ def probe(endpoint=DEFAULT_ENDPOINT, *, timeout=5, cancel=None):
 
 def synthesize(text, language, reference_audio, reference_text, reference_language,
                output_path, *, endpoint=DEFAULT_ENDPOINT, speed=1.0, timeout=180,
-               cancel=None) -> Path:
+               cancel=None, auxiliary_reference_audio=()) -> Path:
     """Generate a target-language WAV using one speaker's original reference.
 
     The caller must extract a 3–10 second single-speaker WAV into its project
@@ -237,14 +238,28 @@ def synthesize(text, language, reference_audio, reference_text, reference_langua
     except (TypeError, ValueError, OSError):
         raise MediaError("INVALID_REFERENCE", "找不到参考原声 WAV，请重新选取原视频片段。") from None
     _wav_info(reference, reference=True)
+    if not isinstance(auxiliary_reference_audio,(tuple,list)) or len(auxiliary_reference_audio)>3:
+        raise MediaError("INVALID_REFERENCE", "最多选择三段同一说话人的补充原声。")
+    auxiliary = []
+    for value in auxiliary_reference_audio:
+        try:
+            path = Path(value).resolve(strict=True)
+            _wav_info(path,reference=True)
+        except (OSError,TypeError,ValueError):
+            raise MediaError("INVALID_REFERENCE", "找不到补充参考原声 WAV。") from None
+        if path == reference or str(path) in auxiliary:
+            raise MediaError("INVALID_REFERENCE", "补充参考原声不能重复。")
+        auxiliary.append(str(path))
     output = Path(output_path).resolve()
-    if output == reference:
+    if output == reference or str(output) in auxiliary:
         raise MediaError("INVALID_REFERENCE", "配音输出不能覆盖参考原声。")
     payload = {"text": text.strip(), "text_lang": language,
                "ref_audio_path": str(reference), "prompt_text": reference_text.strip(),
                "prompt_lang": reference_language, "media_type": "wav",
                "streaming_mode": False, "speed_factor": float(speed),
                "batch_size": 1, "text_split_method": "cut5", "seed": 0}
+    if auxiliary:
+        payload["aux_ref_audio_paths"] = auxiliary
     content_type, data = _request(endpoint, "POST", "/tts", payload=payload,
                                   timeout=timeout, cancel=cancel)
     if content_type not in ("audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream"):

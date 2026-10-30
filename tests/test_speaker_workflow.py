@@ -128,7 +128,12 @@ def test_worker_uses_each_system_voice_and_repairs_bad_cache(lesson, tmp_path, m
 
 
 def test_worker_sends_selected_speakers_reference_to_local_api(lesson, tmp_path):
-    project, _, _ = lesson
+    project, source, audio = lesson
+    # The timbre reference comes from original media, not the ASR cache. Supply
+    # a real source WAV (FFmpeg detects its header despite this fixture suffix).
+    source.write_bytes(audio.read_bytes())
+    project["source"]["sha256"]=file_hash(source)
+    atomic_json(audio.with_suffix(".json"),dict(source_sha256=project["source"]["sha256"],sha256=file_hash(audio)))
     reference_profile(project["speakers"][1])
     payloads = []
     class Handler(BaseHTTPRequestHandler):
@@ -154,6 +159,7 @@ def test_worker_sends_selected_speakers_reference_to_local_api(lesson, tmp_path)
         assert payloads[0]["prompt_text"] == "I am fine, thank you."
         assert payloads[0]["text_lang"] == "zh"
         with wave.open(payloads[0]["ref_audio_path"]) as clip:
+            assert clip.getframerate()==32000
             assert array("h", clip.readframes(1))[0] == 900
         with wave.open(result["outputs"][0]) as clip:
             assert clip.getnframes() == 4000

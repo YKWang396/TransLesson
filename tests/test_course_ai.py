@@ -91,12 +91,15 @@ def test_ai_never_merges_speakers(course, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("text,bad_end", [("The course web page, which has exercises, is available.",4),
-                                         ("This is linear algebra.",2)])
+                                         ("This is linear algebra.",2),
+                                         ("Shall we check that point, which is x=1 and y=2?",4),
+                                         ("If the columns lie in one plane, we are in trouble.",7),
+                                         ("Somehow that's the point where the planes met.",3)])
 def test_ai_repairs_grammar_and_math_term_boundaries(course,tmp_path,monkeypatch,text,bad_end):
     course["segments"] = [{**course["segments"][0],"source_text":text}]
     sent = fake_api(monkeypatch, lambda context,call:{"ends":([bad_end,len(context["tokens"])-1] if call == 1 else [len(context["tokens"])-1])})
     data = organize_sentences(course,settings(tmp_path))
-    assert len(sent) == 2
+    assert len(sent) == 1
     assert [s["source_text"] for s in data["segments"]] == [text]
 
 

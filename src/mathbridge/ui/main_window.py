@@ -548,6 +548,9 @@ class MainWindow(QMainWindow):
             self.alignment_gap.addItem(caption, value)
         form.addRow("时长适配", self.alignment_speed)
         form.addRow("可用停顿", self.alignment_gap)
+        self.alignment_gap.setToolTip("此上限仅用于关闭自动节奏匹配的模式。开启自动匹配时会共享前后空挡，保留短停顿，并限制画面与译声的偏移。")
+        self.auto_timing.toggled.connect(lambda checked:self.alignment_gap.setEnabled(not checked))
+        self.alignment_gap.setEnabled(not self.auto_timing.isChecked())
         self.alignment_speed.currentIndexChanged.connect(self._reload_issues)
         self.alignment_gap.currentIndexChanged.connect(self._reload_issues)
         self.alignment_speed.setMinimumHeight(32)
@@ -846,7 +849,7 @@ class MainWindow(QMainWindow):
         if not speaker:
             self._show_error("请先选择一位说话人。")
             return
-        from mathbridge.application.reference import load_reference_words, reference_for_range, suggest_reference
+        from mathbridge.application.reference import load_reference_words, reference_for_range, suggest_reference, suggest_auxiliary_references
         words=load_reference_words(self._project,self.coordinator.project_dir)
         segment=self._segment(self._segment_id)
         preferred=segment["id"] if segment and segment["speaker_id"]==identifier else None
@@ -854,6 +857,7 @@ class MainWindow(QMainWindow):
         dialog = SpeakerDialog(speaker, self._project.get("languages", {}).get("source", "en"),
                                self._project.get("source", {}).get("duration_ms", 0), reference, self,
                                reference_lookup=lambda a,b:reference_for_range(self._project,identifier,a,b,words),
+                               auxiliary_lookup=lambda a,b:suggest_auxiliary_references(self._project,identifier,words,dict(start_ms=a,end_ms=b)),
                                replay_reference=self._replay_reference_range)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._call("update_speaker", identifier, dialog.changes())
@@ -1217,6 +1221,10 @@ class MainWindow(QMainWindow):
                 store.setValue("recent_projects", [path]+[p for p in paths if p != path][:7])
                 self._refresh_recent_projects()
         self._project = project or None
+        alignment_root=str(getattr(self.coordinator,"project_dir","") or "")
+        if project and alignment_root != getattr(self,"_alignment_project_dir",None):
+            self._alignment_project_dir=alignment_root
+            self._restore_alignment_options(Path(alignment_root))
         self.current_project_box.setVisible(bool(project))
         self.new_project_toggle.setVisible(bool(project))
         if new_project_id != old_project_id:
@@ -1617,6 +1625,25 @@ class MainWindow(QMainWindow):
     def _alignment_options(self):
         return dict(alignment_max_speed=self.alignment_speed.currentData(), alignment_borrow_ms=self.alignment_gap.currentData(),
                     alignment_mode="adaptive" if self.auto_timing.isChecked() else "strict")
+
+    def _restore_alignment_options(self,root):
+        from mathbridge.application.alignment import alignment_options
+        config=alignment_options()
+        try:
+            path=root/"audio/alignment-issues.json"
+            if path.stat().st_size <= 10_000_000:
+                config=alignment_options(json.loads(path.read_text(encoding="utf8"))["options"])
+        except (OSError,ValueError,KeyError,TypeError):
+            pass
+        controls=(self.auto_timing,self.alignment_speed,self.alignment_gap)
+        blocked=[c.blockSignals(True) for c in controls]
+        try:
+            self.auto_timing.setChecked(config["alignment_mode"]=="adaptive")
+            self.alignment_speed.setCurrentIndex(max(0,self.alignment_speed.findData(config["alignment_max_speed"])))
+            self.alignment_gap.setCurrentIndex(max(0,self.alignment_gap.findData(config["alignment_borrow_ms"])))
+            self.alignment_gap.setEnabled(not self.auto_timing.isChecked())
+        finally:
+            for control,prior in zip(controls,blocked):control.blockSignals(prior)
 
     def _reload_issues(self, *_):
         self._issues_key = None

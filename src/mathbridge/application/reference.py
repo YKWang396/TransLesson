@@ -108,7 +108,7 @@ def reference_for_range(project, speaker_id, start, end, words=()):
                 segment_ids=ids, word_timed=word_timed)
 
 
-def suggest_reference(project, speaker_id, words=(), preferred_segment_id=None):
+def _candidates(project, speaker_id, words=()):
     """Prefer 4–8 second complete source units; join fragments of one speaker.
 
     Long units can provide smaller references only with verified word alignment.
@@ -146,16 +146,40 @@ def suggest_reference(project, speaker_id, words=(), preferred_segment_id=None):
                         segment_ids=[first["id"]],word_timed=True))
             if options:
                 candidates.append(min(options,key=lambda c:abs(c["end_ms"]-c["start_ms"]-6000)))
-    if not candidates:
-        return None
+    return candidates
 
-    def score(candidate):
-        text = candidate["reference_text"]
-        duration = candidate["end_ms"]-candidate["start_ms"]
-        density = len(re.findall(r"[\u3400-\u9fff]|[A-Za-z]+",text))/(duration/1000)
-        return (0 if preferred_segment_id in candidate["segment_ids"] else 1,
-                0 if 4000 <= duration <= 8000 else 1,
-                max(0,density-7),
-                0 if re.search(r"[.!?。！？][\"'’”]*$",text) else 1,
-                len(candidate["segment_ids"])-1,abs(duration-6000),candidate["start_ms"])
-    return min(candidates,key=score)
+
+def _score(candidate, preferred_segment_id=None):
+    text = candidate["reference_text"]
+    duration = candidate["end_ms"]-candidate["start_ms"]
+    density = len(re.findall(r"[\u3400-\u9fff]|[A-Za-z]+",text))/(duration/1000)
+    return (0 if preferred_segment_id in candidate["segment_ids"] else 1,
+            0 if 4000 <= duration <= 8000 else 1,
+            max(0,density-7),
+            0 if re.search(r"[.!?。！？][\"'’”]*$",text) else 1,
+            len(candidate["segment_ids"])-1,abs(duration-6000),candidate["start_ms"])
+
+
+def suggest_reference(project, speaker_id, words=(), preferred_segment_id=None):
+    candidates = _candidates(project,speaker_id,words)
+    return min(candidates,key=lambda c:_score(c,preferred_segment_id)) if candidates else None
+
+
+def suggest_auxiliary_references(project, speaker_id, words=(), primary=None, count=3):
+    """Select separate utterances of this speaker for inference, never training.
+
+    Each utterance keeps its own exact transcript and duration. Do not concatenate
+    them into the primary prompt (the backend limits that prompt to 3–10 seconds).
+    """
+    primary = primary or suggest_reference(project,speaker_id,words)
+    if not primary or count <= 0:
+        return []
+    selected = [primary]
+    candidates = sorted(_candidates(project,speaker_id,words),key=_score)
+    for candidate in candidates:
+        if any(candidate["start_ms"] < s["end_ms"]+750 and candidate["end_ms"] > s["start_ms"]-750 for s in selected):
+            continue
+        selected.append(candidate)
+        if len(selected)-1 >= min(3,max(0,count)):
+            break
+    return [{k:c[k] for k in ("start_ms","end_ms","reference_text","reference_language")} for c in selected[1:]]

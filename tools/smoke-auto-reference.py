@@ -45,6 +45,18 @@ def main():
     QTest.qWait(250)
     assert dialog.reference_text.toPlainText()=="Explicit manual correction takes priority."
     dialog.close()
+    auxiliary=[dict(start_ms=10000,end_ms=16000,reference_text=project['segments'][1]['source_text'],reference_language='en')]
+    dialog=SpeakerDialog(speaker,'en',30000,candidate,auxiliary_lookup=lambda a,b:auxiliary,
+                         replay_reference=lambda *args:calls.append(args))
+    assert dialog.use_auxiliary.isChecked() and dialog.auxiliary_list.count()==1
+    assert dialog.changes()['voice_profile'].get('auxiliary_references') is None  # Windows provider.
+    dialog.provider.setCurrentIndex(dialog.provider.findData('gpt_sovits'))
+    assert dialog.changes()['voice_profile']['auxiliary_references']==auxiliary
+    assert not dialog.authorized.isChecked()
+    dialog.replay_auxiliary_button.click();assert calls[-1]==(10000,16000)
+    dialog.use_auxiliary.setChecked(False)
+    assert 'auxiliary_references' not in dialog.changes()['voice_profile']
+    dialog.close()
     saved=copy.deepcopy(speaker)
     saved.update(voice_mode="reference",voice_profile=dict(provider="gpt_sovits",reference_start_ms=2000,
         reference_end_ms=8000,reference_text="Existing manually corrected reference.",reference_language="en"))

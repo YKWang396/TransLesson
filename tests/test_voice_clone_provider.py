@@ -103,6 +103,17 @@ def test_real_http_wav_and_cross_language_payload(reference, tmp_path):
     assert payload["speed_factor"] == 1.15
 
 
+def test_multiple_references_are_distinct_wavs_not_appended_to_prompt(reference,tmp_path):
+    auxiliary=tmp_path/'aux.wav';auxiliary.write_bytes(wav_bytes(5))
+    with local_api() as (endpoint,requests,_):
+        call(reference,tmp_path/'out.wav',endpoint,auxiliary_reference_audio=[auxiliary])
+    payload=requests[0][1]
+    assert payload['aux_ref_audio_paths']==[str(auxiliary.resolve())]
+    assert payload['prompt_text']=='The derivative is positive.'
+    with pytest.raises(MediaError,match='INVALID_REFERENCE'):
+        call(reference,tmp_path/'out.wav',endpoint,auxiliary_reference_audio=[reference])
+
+
 @pytest.mark.parametrize("endpoint", ["https://127.0.0.1:9880", "http://192.168.1.2:9880",
     "http://example.com", "http://127.0.0.1.evil.test:9880", "http://127.0.0.1:0",
     "http://user:pass@127.0.0.1:9880", "http://127.0.0.1:9880/tts?token=x",

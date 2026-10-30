@@ -87,7 +87,7 @@ def plan_alignment(clips, duration_ms, options=None):
 
 def _adaptive(clips, duration_ms, config):
     # Validate using the strict planner first; its bounds remain the fallback.
-    fixed, fixed_issues = plan_alignment(clips, duration_ms, dict(config, alignment_mode="strict"))
+    fixed, _ = plan_alignment(clips, duration_ms, dict(config, alignment_mode="strict"))
     groups = []
     for clip in fixed:
         if (not groups or clip["speaker_id"] != groups[-1][-1]["speaker_id"]
@@ -95,11 +95,33 @@ def _adaptive(clips, duration_ms, config):
                 or clip["start_ms"] > groups[-1][-1].get("limit_end_ms",clip["start_ms"])):
             groups.append([])
         groups[-1].append(clip)
+    # Divide an inter-group pause once: the preceding group can extend into its
+    # first part and the following group can start up to two seconds earlier.
+    # A shared boundary prevents double spending the same silence.
+    slots = {}
+    for i, clip in enumerate(fixed):
+        prior_end = fixed[i-1]["end_ms"] if i else 0
+        if i and clip["start_ms"] > fixed[i-1].get("limit_end_ms",clip["start_ms"]):
+            prior_end = clip["start_ms"]  # Missing speech is not available silence.
+        prior_end = max(prior_end,clip.get("limit_start_ms",0))
+        lead = min(2000,max(0,clip["start_ms"]-prior_end)/(2 if i else 1))
+        begin = clip["start_ms"]-lead
+        if i+1 < len(fixed):
+            next_clip = fixed[i+1]
+            gap = max(0,next_clip["start_ms"]-clip["end_ms"])
+            next_lead = min(2000,gap/2)
+            finish = next_clip["start_ms"]-next_lead-min(180,gap/2)
+        else:
+            finish = duration_ms
+        finish = min(finish,clip.get("limit_end_ms",duration_ms))
+        slots[clip["segment_id"]] = (begin,max(clip["end_ms"],finish))
     plans, issues = [], []
-    for group in groups:
+    pending = list(reversed(groups))
+    while pending:
+        group = pending.pop()
         count = len(group)
-        begin = group[0]["start_ms"]
-        finish = group[-1]["available_end_ms"]
+        begin = slots[group[0]["segment_id"]][0]
+        finish = slots[group[-1]["segment_id"]][1]
         release = [max(begin,c["start_ms"]-2000) for c in group]
         deadline = [min(finish,c["start_ms"]+2000) for c in group]
         pauses = [min(180,max(0,b["start_ms"]-a["end_ms"])) for a,b in zip(group,group[1:])] + [0]
@@ -117,9 +139,28 @@ def _adaptive(clips, duration_ms, config):
             return position <= finish+.01
 
         if not feasible():
-            plans.extend(group)
-            ids = {c["segment_id"] for c in group}
-            issues.extend(i for i in fixed_issues if i.get("segment_id") in ids)
+            if count > 1:
+                # Find disjoint feasible subgroups rather than dropping all
+                # sharing because one dense sentence cannot fit. Dynamic
+                # programming minimizes the number of remaining problem clips.
+                pieces = _feasible_partition(group,slots,config["alignment_max_speed"])
+                if len(pieces)>1:
+                    pending.extend(reversed(pieces))
+                    continue
+            # A dense local group must not lose its surrounding quiet slots just
+            # because sharing across the whole group cannot solve every sentence.
+            for c in group:
+                start,end = slots[c["segment_id"]]
+                # Same-speaker original speech boundaries remain the fallback.
+                available = end-start
+                plan = dict(c,aligned_start_ms=start,shift_ms=round(start-c["start_ms"],3),
+                            available_end_ms=end,available_ms=available,
+                            borrowed_ms=max(0,end-c["end_ms"]),
+                            borrowed_before_ms=round(c["start_ms"]-start,3),
+                            speed=max(1.,c["speech_ms"]/available))
+                plans.append(plan)
+                if plan["speed"] > config["alignment_max_speed"]+1e-8:
+                    issues.append(duration_issue(plan,config["alignment_max_speed"]))
             continue
         # Relax each sentence toward its natural duration while preserving a
         # feasible schedule. Easy sentences keep their natural pace first.
@@ -149,12 +190,39 @@ def _adaptive(clips, duration_ms, config):
             plans.append(dict(c, aligned_start_ms=starts[i], shift_ms=round(starts[i]-c["start_ms"],3),
                               available_end_ms=end, available_ms=available,
                               borrowed_ms=max(0,end-c["end_ms"]),
+                              borrowed_before_ms=max(0,round(c["start_ms"]-starts[i],3)),
                               speed=max(1.,natural[i]/available)))
     return plans, issues
 
 
+def _feasible_partition(group,slots,max_speed):
+    count = len(group)
+    lengths = [min(c["speech_ms"],c["speech_ms"]/max_speed+30) for c in group]
+    costs, stops = [(0,0)]*(count+1),[None]*count
+    for first in range(count-1,-1,-1):
+        costs[first]=(costs[first+1][0]+1,costs[first+1][1]+1)
+        stops[first]=first+1
+        position=slots[group[first]["segment_id"]][0]
+        for last in range(first,count):
+            current=group[last]
+            position=max(position,current["start_ms"]-2000)
+            if position > current["start_ms"]+2000+.01:
+                break
+            position+=lengths[last]
+            if position <= slots[current["segment_id"]][1]+.01:
+                score=(costs[last+1][0],costs[last+1][1]+1)
+                if score < costs[first]:
+                    costs[first],stops[first]=score,last+1
+            if last+1<count:
+                position+=min(180,max(0,group[last+1]["start_ms"]-current["end_ms"]))
+    pieces,first=[],0
+    while first<count:
+        last=stops[first];pieces.append(group[first:last]);first=last
+    return pieces
+
+
 def alignment_fingerprint(project, settings, options=None):
-    return fingerprint(dict(version="adaptive-rhythm-1", source=project["source"]["sha256"],
+    return fingerprint(dict(version="adaptive-rhythm-2", source=project["source"]["sha256"],
                             duration_ms=project["source"]["duration_ms"],
                             segments=[dict(id=s["id"], start_ms=s["start_ms"], end_ms=s["end_ms"],
                                            tts=segment_fingerprint(project, s, settings))
@@ -248,6 +316,7 @@ def cached_alignment_report(project, settings, root, options=None):
         clips.append(dict(segment_id=segment["id"], index=index + 1, path=str(path),
                           start_ms=segment["start_ms"], end_ms=segment["end_ms"], speech_ms=speech_ms,
                           speaker_id=segment["speaker_id"],original_speech_ms=original_ms,pause_saved_ms=saved_ms,
+                          limit_start_ms=segments[index-1]["end_ms"] if index else 0,
                           limit_end_ms=segments[index + 1]["start_ms"] if index + 1 < len(segments)
                           else project["source"]["duration_ms"]))
     plans, issues = plan_alignment(clips, project["source"]["duration_ms"], config)
@@ -260,6 +329,7 @@ def cached_alignment_report(project, settings, root, options=None):
                 pause_compacted_count=sum(c.get("pause_saved_ms",0)>20 for c in plans),
                 shifted_count=sum(abs(c.get("shift_ms",0))>20 for c in plans),
                 accelerated_count=sum(c["speed"]>1.005 for c in plans),
+                borrowed_before_count=sum(c.get("borrowed_before_ms",0)>20 for c in plans),
                 **suggest_merges(project, {clip["segment_id"]: clip["speech_ms"] for clip in clips}, config))
 
 
