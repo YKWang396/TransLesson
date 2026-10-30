@@ -495,7 +495,7 @@ class Coordinator(QObject):
         process.setWorkingDirectory(str(root))
         process.setProgram(sys.executable)
         if getattr(sys, "frozen", False):
-            worker_executable = Path(sys.executable).with_name("mathbridge-worker.exe")
+            worker_executable = Path(sys.executable).with_name("translesson-worker.exe")
             if worker_executable.is_file():
                 process.setProgram(str(worker_executable))
             process.setArguments(["--worker"])

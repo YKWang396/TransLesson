@@ -32,4 +32,4 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'MathJax dependency installation failed.' }
 }
 finally { Pop-Location }
-Write-Host 'MathBridge is ready. Run Start-MathBridge.cmd. ASR weights are imported separately; no course data has been uploaded.'
+Write-Host 'TransLesson development environment is ready. Run tools/run-dev.ps1. ASR weights are imported separately; no course data has been uploaded.'

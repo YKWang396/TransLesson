@@ -26,3 +26,4 @@ build/
 dist/
 *.egg-info/
 artifacts/
+/课译 TransLesson.exe

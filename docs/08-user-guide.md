@@ -1,22 +1,16 @@
-# 课译 MathBridge 使用说明
+# 课译 TransLesson 使用说明
 
-更新日期：2026-10-30。当前为 0.1.5 开发版本，配音与集中试听见 [自动节奏配音](14-adaptive-dubbing.md)，AI 文本流程优先阅读 [AI 自动断句、教学讲义与项目恢复](13-ai-course-workflow.md)。下文保留通用操作及高级修订说明；设计目标与实际完成范围见 [实现状态](09-implementation-status.md)。换电脑时另见 [安装与项目迁移](12-another-computer.md)。
+更新日期：2026-10-31。当前为 0.1.6 开发版本，配音与集中试听见 [自动节奏配音](14-adaptive-dubbing.md)，AI 文本流程优先阅读 [AI 自动断句、教学讲义与项目恢复](13-ai-course-workflow.md)。下文保留通用操作及高级修订说明；设计目标与实际完成范围见 [实现状态](09-implementation-status.md)。换电脑时另见 [安装与项目迁移](12-another-computer.md)。
 
 第一次使用时按 **导入视频 → 准备原文 → AI 断句并翻译 → 抽查与处理问题 → 配音 → AI 教学讲义 → 导出** 操作。在“02 校对”先看顶部的当前步骤和蓝色主按钮；无需逐句手填或逐句确认。需要处理公式、调整时间或区分说话人时，再展开“高级校对工具”。
 
 ## 1. 启动程序
 
-在本项目目录中双击 **`Start-MathBridge.cmd`**，打开原生 Windows 桌面窗口。第一次启动为空白项目，不会自动上传课程或下载模型。
+打开文件夹，直接双击 **课译 TransLesson.exe**。当前工作目录和源码目录均已放置这个入口；便携包完整解压后，同名 EXE 位于第一层，无需使用 Start 脚本。请保留整个文件夹，运行文件不能只复制一部分。详细结构见 [EXE 启动与改名说明](15-translesson-launch.md)。
 
-也可直接运行 **`dist/MathBridge/MathBridge.exe`**。该便携目录包含 Python、Qt、FFmpeg 和 Node.js/MathJax，无需为此另装开发环境；必须保留整个目录，不能只复制 EXE。已在本机隔离开发工具 PATH 验证，尚未在另一台干净 Windows 机器验收。
+已有课程从“最近项目”打开，原有模型路径和 API 设置继续使用。首次启动为空白项目。
 
-如果通过源码启动时提示先运行 Setup，先双击 **`Setup-MathBridge.cmd`**，等依赖安装成功后再启动。直接运行便携版 EXE 可以跳过这一段。Setup 需要网络，用于安装 Python 包及本地 MathJax 依赖；它不会下载 Whisper 权重，也不会提交课程内容。源码安装环境应具备：
-
-- Windows x64、Python 3.11 或 3.12；当前项目要求 Python `>=3.11,<3.14`。
-- Node.js 和 npm，或可用的 pnpm。公式讲义通过本地 Node.js/MathJax 排版。
-- 可播放的本地课程视频；配音需要 Windows 已安装的目标语言声音。
-
-本文件夹已准备好的 `.venv` 只适用于当前环境；复制到另一台电脑后应重新 Setup。当前启动脚本使用 Python 环境，不能据此视为已通过“干净机器免 Python 安装包”验收。
+仅从源码调试时，准备 Python 3.12 x64、Node.js 与依赖，运行 `Setup-TransLesson.cmd`，然后执行 `powershell.exe -File tools/run-dev.ps1`。普通便携版使用不需要安装这套开发环境。
 
 只做字幕校对时可以暂时不安装语音识别组件。需要本地转写时，在本项目目录打开 PowerShell，执行：
 
@@ -211,7 +205,7 @@ Key 默认只留在当前会话。勾选“将 Key 保存在 Windows 凭据库�
 | 提示或现象 | 处理方式 |
 |---|---|
 | 校对页不知道下一步 | 先看顶部提示；长课先看“问题清单”和“只看问题句”，可以直接去配音，不必逐句点击确认完。 |
-| 启动提示先运行 Setup | 在本项目目录执行 `Setup-MathBridge.cmd`；检查 Python、Node.js 和联网环境。 |
+| 启动提示先运行 Setup | 在本项目目录执行 `Setup-TransLesson.cmd`；检查 Python、Node.js 和联网环境。 |
 | 模型缺失 | 便携版已含识别运行组件，选择完整的本地 Whisper 模型目录即可。源码环境另提示缺识别组件时，再使用 Setup 的 `-WithASR` 选项安装。应用不会代下载模型。 |
 | 外部 API 未授权 / Key 错误 | 在“文本与隐私”明确授权并检查账户配置；可改为手动校对继续。 |
 | 原视频已移动 / 内容改变 | 使用“重连媒体”选择指纹相同的原文件；内容改变则新建项目。 |

@@ -139,7 +139,7 @@ def execute_worker(stage, *, project, project_dir, source, settings, options, fr
     command = dict(type="command", request_id=request_id, stage=stage, project_dir=str(project_dir),
                    project=project, project_revision=project["revision"] if project else 0,
                    source_path=str(source), settings=settings, options=options, artifacts=[])
-    executable = [str(bundle / "mathbridge-worker.exe"), "--worker"] if frozen else [sys.executable, "-m", "mathbridge.worker"]
+    executable = [str(bundle / "translesson-worker.exe"), "--worker"] if frozen else [sys.executable, "-m", "mathbridge.worker"]
     process = subprocess.run(executable, input=json.dumps(command, ensure_ascii=False) + "\n",
                              text=True, encoding="utf-8", capture_output=True, env=environment,
                              cwd=bundle if frozen else ROOT, timeout=60)
@@ -172,7 +172,7 @@ def check_output(result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frozen", action="store_true", help="Use the portable worker and its bundled FFmpeg, with isolated PATH")
-    parser.add_argument("--bundle", type=Path, default=ROOT / "dist/MathBridge")
+    parser.add_argument("--bundle", type=Path, default=ROOT / "dist/TransLesson")
     args = parser.parse_args()
     bundle = args.bundle.resolve()
     report_path = ROOT / "artifacts" / ("speakers-frozen-report.json" if args.frozen else "speakers-report.json")
@@ -191,8 +191,8 @@ def main():
                   created_at=datetime.now(timezone.utc).isoformat())
     try:
         environment = worker_environment(args.frozen)
-        if args.frozen and not (bundle / "mathbridge-worker.exe").is_file():
-            raise RuntimeError(f"Portable worker is missing: {bundle / 'mathbridge-worker.exe'}")
+        if args.frozen and not (bundle / "translesson-worker.exe").is_file():
+            raise RuntimeError(f"Portable worker is missing: {bundle / 'translesson-worker.exe'}")
         ffmpeg = find_ffmpeg(args.frozen, bundle)
         report["ffmpeg"] = dict(path=str(ffmpeg), sha256=file_hash(ffmpeg), bundled=args.frozen)
         source = folder / "人工合成 两人原声.mp4"

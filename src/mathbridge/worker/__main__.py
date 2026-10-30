@@ -417,7 +417,7 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         atomic_json(directory / "render-plan.json", plan)
         from mathbridge import __version__
         atomic_json(directory / "export-report.json", dict(project_revision=project["revision"], background=background, warnings=issues,
-                                                         created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), software="MathBridge " + __version__, checks="hashes, dependency graph, cue ranges, media probe"))
+                                                         created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), software="课译 TransLesson " + __version__, checks="hashes, dependency graph, cue ranges, media probe"))
         outputs.extend([str(directory / "render-plan.json"), str(directory / "export-report.json")])
         metadata.update(export_revision=project["revision"], export_directory=str(directory), warnings=issues)
     else:

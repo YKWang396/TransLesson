@@ -35,7 +35,7 @@ def main():
             if requirement.marker is None or requirement.marker.evaluate({'extra': ''}):
                 wanted.append(requirement.name)
     records = sorted(resolved.values(), key=lambda r: r['name'].lower())
-    package_root = ROOT / 'dist/MathBridge'
+    package_root = ROOT / 'dist/TransLesson'
     notices = package_root / 'licenses'
     notices.mkdir(parents=True, exist_ok=True)
     for record in records:
@@ -70,7 +70,7 @@ def main():
             while chunk := f.read(1024 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()
-    report = {'application_version': application_version, 'platform': platform.platform(), 'python': sys.version, 'packages': records,
+    report = {'application_name': '课译 TransLesson', 'application_version': application_version, 'platform': platform.platform(), 'python': sys.version, 'packages': records,
               'node': {'version': node_version, 'sha256': sha(node) if node else None, 'license_status': 'Upstream Node.js and bundled third-party license collection required before public redistribution'},
               'mathjax': {'version': mathjax_data['version'], 'license': mathjax_data['license']},
               'ffmpeg': {'version_and_configuration': ffmpeg_version, 'sha256': sha(ffmpeg), 'license': 'GPL version 3 or later per actual -L output; compatible corresponding source distribution must be arranged before public redistribution'},
@@ -80,7 +80,7 @@ def main():
     (ROOT / 'packaging/windows/runtime-manifest.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     shutil.copyfile(ROOT / 'packaging/windows/runtime-manifest.json', package_root / 'runtime-manifest.json')
     shutil.copytree(ROOT / 'docs', package_root / 'docs', dirs_exist_ok=True)
-    (package_root / '使用说明.md').write_text('# 课译 MathBridge 0.1\n\n双击 MathBridge.exe 启动。请保留整个文件夹。\n\n[详细使用说明](docs/08-user-guide.md) · [多人原声配音配置](docs/11-voice-backends.md) · [实现与验证范围](docs/09-implementation-status.md)\n\nWhisper 和说话人识别模型需要另行准备；文本 API 需要 Key 和文本上传许可。每人可配置独立系统声音，或通过本机 GPT-SoVITS 服务参考原声配音。克隆模型及服务未打包，真实音色相似度和长课效果需另行验收。\n', encoding='utf-8')
+    (package_root / '使用说明.md').write_text('# 课译 TransLesson 0.1\n\n双击课译 TransLesson.exe 启动。请保留整个文件夹。\n\n[详细使用说明](docs/08-user-guide.md) · [多人原声配音配置](docs/11-voice-backends.md) · [实现与验证范围](docs/09-implementation-status.md)\n\nWhisper 和说话人识别模型需要另行准备；文本 API 需要 Key 和文本上传许可。每人可配置独立系统声音，或通过本机 GPT-SoVITS 服务参考原声配音。克隆模型及服务未打包，真实音色相似度和长课效果需另行验收。\n', encoding='utf-8')
     print(f'Recorded {len(records)} installed runtime packages and available license files')
 
 

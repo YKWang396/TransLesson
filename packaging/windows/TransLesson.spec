@@ -1,11 +1,26 @@
-# Build from project root with: .venv/Scripts/python.exe -m PyInstaller packaging/windows/MathBridge.spec
+# Build from project root with: .venv/Scripts/python.exe -m PyInstaller packaging/windows/TransLesson.spec
 import os
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
+from PyInstaller.utils.win32.versioninfo import VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct
 
 root = Path(SPECPATH).resolve().parents[1]
+app_version = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf8'))['project']['version']
+version_tuple = tuple(int(n) for n in app_version.split('.')) + (0,)
+def file_version(filename):
+    return VSVersionInfo(ffi=FixedFileInfo(filevers=version_tuple, prodvers=version_tuple,
+        mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)), kids=[
+        StringFileInfo([StringTable('080404b0',[
+            StringStruct('FileDescription','课译 TransLesson'),
+            StringStruct('ProductName','课译 TransLesson'),
+            StringStruct('InternalName','TransLesson'),
+            StringStruct('FileVersion',app_version),
+            StringStruct('ProductVersion',app_version),
+            StringStruct('OriginalFilename',filename)])]),
+        VarFileInfo([VarStruct('Translation',[2052,1200])])])
 node = os.environ.get('MATHBRIDGE_NODE') or shutil.which('node')
 if not node:
     raise RuntimeError('Node.js is required to bundle offline MathJax')
@@ -55,8 +70,10 @@ for name, path in openssl.items():
 a.binaries = [(entry[0], str(openssl[Path(entry[0]).name.lower()]), entry[2])
               if Path(entry[0]).name.lower() in openssl else entry for entry in a.binaries]
 pyz = PYZ(a.pure)
-gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name='MathBridge', debug=False,
-          bootloader_ignore_signals=False, strip=False, upx=False, console=False)
-worker = EXE(pyz, a.scripts, [], exclude_binaries=True, name='mathbridge-worker', debug=False,
-             bootloader_ignore_signals=False, strip=False, upx=False, console=True)
-coll = COLLECT(gui, worker, a.binaries, a.datas, strip=False, upx=False, name='MathBridge')
+gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name='课译 TransLesson', debug=False,
+          bootloader_ignore_signals=False, strip=False, upx=False, console=False,
+          version=file_version('课译 TransLesson.exe'))
+worker = EXE(pyz, a.scripts, [], exclude_binaries=True, name='translesson-worker', debug=False,
+             bootloader_ignore_signals=False, strip=False, upx=False, console=True,
+             version=file_version('translesson-worker.exe'))
+coll = COLLECT(gui, worker, a.binaries, a.datas, strip=False, upx=False, name='TransLesson')

@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
         self._note_timer.setSingleShot(True)
         self._note_timer.setInterval(650)
         self._note_timer.timeout.connect(self._commit_note)
-        self.setWindowTitle("课译 MathBridge · 数学课程翻译工作台")
+        self.setWindowTitle("课译 TransLesson · 数学课程翻译工作台")
         self.resize(1480, 940)
         self.setMinimumSize(1120, 760)
         self.setStyleSheet(STYLESHEET)
@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         title = QVBoxLayout()
         title.setSpacing(1)
-        title.addWidget(label("课译 MathBridge", "brand"))
+        title.addWidget(label("课译 TransLesson", "brand"))
         title.addWidget(label("数学课程 · 翻译与证据校对", "eyebrow"))
         header.addLayout(title)
         header.addStretch()
@@ -883,7 +883,7 @@ class MainWindow(QMainWindow):
             if not self.directory_path.text():
                 import re
                 name = re.sub(r'[<>:"/\\|?*]', "_", Path(path).stem)[:100].rstrip(" .") or "课程"
-                base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)) / "MathBridgeProjects"
+                base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)) / "TransLessonProjects"
                 candidate = base / name
                 suffix = 2
                 while (candidate / "project.json").exists():
@@ -923,7 +923,7 @@ class MainWindow(QMainWindow):
             self._show_error(str(error))
 
     def _open_project(self):
-        path = QFileDialog.getExistingDirectory(self, "打开 MathBridge 项目目录")
+        path = QFileDialog.getExistingDirectory(self, "打开课译 TransLesson 项目目录")
         if path:
             self._call("open_project", path)
 
@@ -2061,11 +2061,11 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(str(message))
 
     def _show_error(self, message):
-        QMessageBox.warning(self, "课译 MathBridge", str(message))
+        QMessageBox.warning(self, "课译 TransLesson", str(message))
 
     def _about(self):
         from mathbridge import __version__
-        QMessageBox.information(self, "关于课译 MathBridge", f"课译 MathBridge {__version__}\n\n本地数学课程翻译与校对工作台。\n支持字幕校对、课程术语、公式证据、多人声线配置和多格式导出。\n\nASR 与自动区分说话人需本地模型；原声克隆需另行启动本机 GPT-SoVITS 服务。文本 API 需单独授权。克隆音色需试听确认，自动手写公式 OCR 仍待实现。")
+        QMessageBox.information(self, "关于课译 TransLesson", f"课译 TransLesson {__version__}\n\n本地数学课程翻译与校对工作台。\n支持字幕校对、课程术语、公式证据、多人声线配置和多格式导出。\n\nASR 与自动区分说话人需本地模型；原声克隆需另行启动本机 GPT-SoVITS 服务。文本 API 需单独授权。克隆音色需试听确认，自动手写公式 OCR 仍待实现。")
 
     def closeEvent(self, event):
         if not self._commit_all():

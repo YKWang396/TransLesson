@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--https', action='store_true', help='Also check real HTTPS with an intentionally invalid API key (expects HTTP 401/403).')
     args = parser.parse_args()
-    bundle = ROOT / 'dist/MathBridge'
+    bundle = ROOT / 'dist/TransLesson'
     ssl_policy = Path(sys.base_prefix) / 'Lib' / 'codex-rejected-cas.pem'
     if ssl_policy.is_file():
         assert (bundle/'_internal'/ssl_policy.name).read_bytes() == ssl_policy.read_bytes(), 'Missing Python TLS policy'
@@ -49,7 +49,7 @@ def main():
                        source_path='', options={}, settings=dict(text_provider='deepseek', model='deepseek-flash',
                        api_base='https://api.deepseek.com', api_key='invalid-key-for-tls-smoke', allow_text_api=True,
                        budget_cny=1, max_calls=3, input_price_per_million=2, output_price_per_million=8))
-        result = subprocess.run([str(bundle/'mathbridge-worker.exe'), '--worker'],
+        result = subprocess.run([str(bundle/'translesson-worker.exe'), '--worker'],
                                 input=json.dumps(command)+'\n', text=True, encoding='utf-8',
                                 capture_output=True, env=environment, cwd=bundle, timeout=30)
         done = next((json.loads(line) for line in result.stdout.splitlines()
@@ -57,7 +57,7 @@ def main():
         assert 'API_AUTH_FAILED' in done.get('message',''), (done, result.stderr)
         print('PASS: frozen HTTPS reached API authentication; no valid key used')
     screenshot = ROOT / 'artifacts/ui-portable.png'
-    subprocess.run([str(bundle / 'MathBridge.exe'), str(project_dir), '--smoke-test', '--screenshot', str(screenshot)],
+    subprocess.run([str(bundle / '课译 TransLesson.exe'), str(project_dir), '--smoke-test', '--screenshot', str(screenshot)],
                    env=environment, cwd=bundle, timeout=30, check=True)
     assert screenshot.is_file() and screenshot.stat().st_size > 5000
     results = []
@@ -68,7 +68,7 @@ def main():
                    'stage': stage, 'project_dir': str(project_dir), 'project': project,
                    'project_revision': project['revision'], 'source_path': store.source_path,
                    'settings': {}, 'options': options, 'artifacts': artifacts}
-        result = subprocess.run([str(bundle / 'mathbridge-worker.exe'), '--worker'], input=json.dumps(command, ensure_ascii=False) + '\n',
+        result = subprocess.run([str(bundle / 'translesson-worker.exe'), '--worker'], input=json.dumps(command, ensure_ascii=False) + '\n',
                                 text=True, encoding='utf-8', capture_output=True, env=environment, cwd=bundle, timeout=60)
         messages = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         done = next((m for m in messages if m.get('type') == 'done'), {})

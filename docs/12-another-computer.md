@@ -1,12 +1,12 @@
 # 在另一台 Windows 电脑继续使用
 
-更新日期：2026-10-30，适用 0.1.5 开发版本。**换电脑需要分别准备程序、识别模型和课程项目。GitHub 源码不包含后两项，也不包含 API Key；Releases 另提供完整 Windows 便携程序。**
+更新日期：2026-10-31，适用 0.1.6 开发版本。**换电脑需要分别准备程序、识别模型和课程项目。GitHub 源码不包含后两项，也不包含 API Key；Releases 另提供完整 Windows 便携程序。**
 
 0.1.4 的操作入口见 [AI 课程工作流](13-ai-course-workflow.md)。请使用本版便携包，0.1.3 遗漏 TLS 证书策略文件，会导致打包后 API 连接失败。项目目录中若带有原媒体且指纹一致，程序能自动恢复关联；否则仍须重连原媒体。
 
 ## 最省事：复制完整便携程序
 
-从原电脑复制整个 `dist/MathBridge` 文件夹，在另一台 Windows x64 电脑运行其中的 `MathBridge.exe`。不要只复制 EXE，旁边的 worker、`_internal` 及其余文件都要保留。这条路径不需要再安装 Python、Node.js 或 faster-whisper 程序组件。
+从原电脑复制整个 `dist/TransLesson` 文件夹，在另一台 Windows x64 电脑运行其中的 `课译 TransLesson.exe`。不要只复制 EXE，旁边的 worker、`_internal` 及其余文件都要保留。这条路径不需要再安装 Python、Node.js 或 faster-whisper 程序组件。
 
 便携包目前通过的是本机隔离开发工具后的运行检查，尚未在另一台干净 Windows 电脑完成验收。标准配音依赖 Windows 已安装的目标语言声音；如果没有中文或英文声音，需要在 Windows 设置里安装对应语音。
 
@@ -28,7 +28,7 @@ cd MathBridge
 
 ```powershell
 py -3.12 -m venv .venv
-.\Setup-MathBridge.cmd
+.\Setup-TransLesson.cmd
 ```
 
 3. 需要本地识别音频时，再安装 ASR 可选组件：
@@ -37,7 +37,7 @@ py -3.12 -m venv .venv
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\setup.ps1 -WithASR
 ```
 
-4. 双击 `Start-MathBridge.cmd` 启动。Setup 会联网安装软件依赖与本地 MathJax；不会自动下载识别模型或上传课程。
+4. 使用 `powershell.exe -File tools/run-dev.ps1` 运行源码。Setup 会联网安装软件依赖与本地 MathJax；不会自动下载识别模型或上传课程。
 
 不要从原电脑搬 `.venv` 代替安装，它绑定原电脑的环境和路径。若只导入已有 SRT/VTT 并手动翻译，可跳过 ASR 组件和识别模型。
 
@@ -50,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\setup.ps1 -WithA
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\build-windows.ps1
 ```
 
-构建完成后，程序在 `dist/MathBridge/MathBridge.exe`。仍须保留完整 `dist/MathBridge` 目录。若需要自动区分说话人，按 [声音后端说明](11-voice-backends.md) 另行准备 sherpa-onnx 组件和模型；参考原声音色还需自行准备 GPT-SoVITS 服务及其模型。
+构建完成后，程序在 `dist/TransLesson/课译 TransLesson.exe`。仍须保留完整 `dist/TransLesson` 目录。若需要自动区分说话人，按 [声音后端说明](11-voice-backends.md) 另行准备 sherpa-onnx 组件和模型；参考原声音色还需自行准备 GPT-SoVITS 服务及其模型。
 
 ## 复制已有模型和课程
 

@@ -50,7 +50,7 @@ def main():
         system32 = Path(os.environ.get("WINDIR", "C:/Windows")) / "System32"
         environment["PATH"] = os.pathsep.join((str(system32), str(system32 / "WindowsPowerShell/v1.0")))
         environment.pop("PYTHONPATH", None)
-        executable = [str(ROOT / "dist/MathBridge/mathbridge-worker.exe"), "--worker"]
+        executable = [str(ROOT / "dist/TransLesson/translesson-worker.exe"), "--worker"]
     else:
         environment["PYTHONPATH"] = str(ROOT / "src")
         if args.trace:
