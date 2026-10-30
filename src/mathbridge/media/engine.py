@@ -341,7 +341,7 @@ class MediaEngine:
             return self.probe(path)["duration_ms"] / 1000
 
     def align_and_mix(self, clips, dest, duration_ms, source=None, background="dub_only", *,
-                      alignment_max_speed=1.15, alignment_borrow_ms=1000) -> Path:
+                      alignment_max_speed=1.15, alignment_borrow_ms=1000, alignment_mode="adaptive") -> Path:
         from mathbridge.application.alignment import duration_issue, plan_alignment
         background = {"quiet_original": "low_original", "original": "original_only"}.get(background, background)
         if background not in ("dub_only", "low_original", "original_only"):
@@ -361,7 +361,8 @@ class MediaEngine:
             measured.append(dict(clip, speech_ms=self._audio_duration(clip["path"]) * 1000))
         try:
             ordered, issues = plan_alignment(measured, duration_ms,
-                dict(alignment_max_speed=alignment_max_speed, alignment_borrow_ms=alignment_borrow_ms))
+                dict(alignment_max_speed=alignment_max_speed, alignment_borrow_ms=alignment_borrow_ms,
+                     alignment_mode=alignment_mode))
         except ValueError as exc:
             code, _, message = str(exc).partition(": ")
             raise MediaError(code, message) from exc
@@ -383,7 +384,7 @@ class MediaEngine:
 
                 for index, clip in enumerate(ordered):
                     self._check()
-                    start_frame = round(clip["start_ms"] * rate / 1000)
+                    start_frame = round(clip.get("aligned_start_ms",clip["start_ms"]) * rate / 1000)
                     window = clip["available_ms"] / 1000
                     speed = clip["speed"]
                     normalized = folder / f"clip-{index}.wav"

@@ -186,6 +186,10 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
     elif stage in {"dub", "preview"}:
         from mathbridge.application.alignment import alignment_options, cached_alignment_report
         alignment_config = alignment_options(options)
+        rhythm_audio = None
+        if alignment_config["alignment_mode"] == "adaptive" and not options.get("sample_only"):
+            progress("dub",0,0,"分析原声节奏与停顿")
+            rhythm_audio = source_audio()
         requested = options.get("segment_ids")
         segments = [s for s in project["segments"] if not requested or s["id"] in requested]
         if stage == "preview" and not requested:
@@ -216,6 +220,8 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                 except (OSError, ValueError):
                     pass
             if not cache_valid:
+                if options.get("timing_sample"):
+                    raise ValueError("STALE_AUDIO: 请先生成这句自然配音，再试听调整结果")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 if voice["provider"] == "gpt_sovits":
                     from mathbridge.application.voices import prepare_reference
@@ -236,14 +242,28 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
             artifacts.append(artifact)
             outputs.append(str(dest))
         if options.get("sample_only"):
+            if options.get("timing_sample"):
+                from mathbridge.application.dubbing import prepare_timing
+                s=segments[0]
+                clip=dict(segment_id=s["id"],speaker_id=s["speaker_id"],path=str(dest),start_ms=s["start_ms"],end_ms=s["end_ms"])
+                prepared=prepare_timing(project,settings,root,[clip],source_audio(),cancel,progress)[0] if alignment_config["alignment_mode"]=="adaptive" else clip
+                timing=cached_alignment_report(project,settings,root,alignment_config)
+                plan=next(c for c in timing["plans"] if c["segment_id"]==s["id"])
+                speed=min(alignment_config["alignment_max_speed"],plan["speed"])
+                sample=job_dir/"matched-sample.wav"
+                engine()._ffmpeg(["-i",prepared["path"],"-af",f"atempo={speed:.9f}","-c:a","pcm_s16le",sample],stage="dub")
+                return dict(artifacts=artifacts,outputs=[str(sample)],metadata=dict(sample=True,timing_sample=True,speaker_id=s["speaker_id"]))
             return dict(artifacts=artifacts, outputs=outputs, metadata=dict(speaker_id=segments[0]["speaker_id"], sample=True))
         all_segments = sorted(project["segments"], key=lambda item: item["start_ms"])
         boundaries = {s["id"]: dict(index=i + 1, limit_end_ms=all_segments[i + 1]["start_ms"]
                       if i + 1 < len(all_segments) else project["source"]["duration_ms"])
                       for i, s in enumerate(all_segments)}
         clips = [dict(path=str(safe_path(root, a["path"])), start_ms=s["start_ms"], end_ms=s["end_ms"],
-                      segment_id=s["id"], **boundaries[s["id"]])
+                      segment_id=s["id"],speaker_id=s["speaker_id"], **boundaries[s["id"]])
                  for s, a in zip(segments, artifacts)]
+        if rhythm_audio:
+            from mathbridge.application.dubbing import prepare_timing
+            clips = prepare_timing(project,settings,root,clips,rhythm_audio,cancel,progress)
         alignment_report = cached_alignment_report(project, settings, root, alignment_config)
         report_path = safe_path(root, "audio/alignment-issues.json" if stage == "dub" else "audio/preview-alignment-issues.json")
         atomic_json(report_path, alignment_report)
@@ -269,7 +289,10 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
             from mathbridge.application.subtitles import write_subtitles
             preview_project = copy.deepcopy(project)
             preview_project["segments"] = segments
-            _, preview_subtitles = write_subtitles(preview_project, job_dir)
+            from mathbridge.application.subtitles import dubbing_timing
+            from mathbridge.application.alignment import plan_alignment
+            preview_plans,_ = plan_alignment(clips,preview_duration,alignment_config)
+            _, preview_subtitles = write_subtitles(preview_project, job_dir,dubbing_timing(preview_plans,preview_duration))
             short_video = job_dir / "preview.mp4"
             engine().preview_video(source, mixed, preview_subtitles["srt"], short_video, duration_ms=preview_duration,
                                    background=options.get("background", "dub_only"))
@@ -314,7 +337,7 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
             raise ValueError("EXPORT_BLOCKED: " + "；".join(errors[:12]))
         directory = safe_path(root, f"exports/revision-{project['revision']}-{job_id[-12:]}")
         directory.mkdir(parents=True, exist_ok=False)
-        cues, subtitles = write_subtitles(project, directory)
+        timing = None
         export_ids = []
         def add_artifact(path, kind, dependencies=(), fp=None):
             item = dict(id=kind + "-" + uuid.uuid4().hex[:16], kind=kind, path=path.relative_to(root).as_posix(),
@@ -324,9 +347,6 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
             export_ids.append(item["id"])
             outputs.append(str(path))
             return item
-        for ext in ("srt", "vtt", "ass"):
-            if ext in formats:
-                add_artifact(subtitles[ext], "subtitles")
         audio = None
         mix_artifact = None
         background = options.get("background", "dub_only")
@@ -345,18 +365,29 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                     raise ValueError(f"ARTIFACT_CHANGED: {segment['id']} 配音文件已改变")
                 artifacts.append(cached)
                 clips.append(dict(path=str(path), start_ms=segment["start_ms"], end_ms=segment["end_ms"],
-                                  segment_id=segment["id"], index=len(clips) + 1))
+                                  segment_id=segment["id"],speaker_id=segment["speaker_id"], index=len(clips) + 1))
             audio = directory / "lesson.wav"
+            if alignment_config["alignment_mode"] == "adaptive":
+                from mathbridge.application.dubbing import prepare_timing
+                clips = prepare_timing(project,settings,root,clips,source_audio(),cancel,progress)
             atomic_json(safe_path(root, "audio/alignment-issues.json"),
                         cached_alignment_report(project, settings, root, alignment_config))
             engine().align_and_mix(clips, audio, project["source"]["duration_ms"], source=source,
                                    background=background, **alignment_config)
+            from mathbridge.application.subtitles import dubbing_timing
+            from mathbridge.application.alignment import plan_alignment
+            plans,_ = plan_alignment(clips,project["source"]["duration_ms"],alignment_config)
+            timing = dubbing_timing(plans,project["source"]["duration_ms"])
             mix_artifact = add_artifact(audio, "mix", [dict(artifact_id=a["id"], sha256=a["sha256"]) for a in artifacts if a["kind"] == "tts"])
             if "wav" not in formats:
                 outputs.remove(str(audio))
                 export_ids.remove(mix_artifact["id"])
         elif "wav" in formats:
             raise ValueError("INVALID_BACKGROUND: 原声字幕模式不生成目标语言 WAV")
+        cues, subtitles = write_subtitles(project,directory,timing)
+        for ext in ("srt","vtt","ass"):
+            if ext in formats:
+                add_artifact(subtitles[ext],"subtitles")
         if set(formats) & {"pdf", "markdown"}:
             pdf = directory / "handout.pdf"
             md = directory / "handout.md"
@@ -380,6 +411,8 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
             outputs.append(str(directory / "project.json"))
         plan = dict(schema_version="1.0", illustrative=False, project_id=project["project_id"], project_revision=project["revision"],
                     source_sha256=project["source"]["sha256"], cues=cues, artifacts=artifacts, export_artifact_ids=export_ids)
+        if timing is not None:
+            plan["dubbing_timing"] = timing
         validate_render_plan(plan, project, root)
         atomic_json(directory / "render-plan.json", plan)
         from mathbridge import __version__

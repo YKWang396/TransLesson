@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from .editors import FormulaDialog, FrameEvidenceDialog, REVIEW_LABELS, SpeakerDialog, TermDialog, review_combo
 from .settings import SettingsDialog, load_settings, save_settings
 from .review_workflow import review_guidance
-from .issue_dialogs import SpokenTextDialog
+from .issue_dialogs import SpokenTextDialog, DubbingReviewDialog
 from .theme import STYLESHEET
 
 
@@ -519,12 +519,27 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(label("让译文，回到原课的时间线上。", "pageTitle"))
-        layout.addWidget(label("配音使用单独校对的读法文本。合成后检查每段时长；过长片段需要修订。", "description"))
+        layout.addWidget(label("分析原声停顿 → 自然生成译声 → 测量时长 → 自动调整停顿和局部语速。先自动处理，再抽查剩余问题。", "description"))
+        row=QHBoxLayout()
+        self.generate_dub_button=self._stage_button("自动生成并匹配配音","dub",True)
+        row.addWidget(self.generate_dub_button)
+        self.listen_dub_button=button("试听最新配音",self._listen_dub)
+        self.listen_dub_button.setEnabled(False);row.addWidget(self.listen_dub_button)
+        self.dub_review_button=button("集中试听 / 抽查",self._show_dub_review)
+        row.addWidget(self.dub_review_button);row.addStretch();layout.addLayout(row)
+        self.dub_status=label("点击自动生成并匹配配音；已有自然配音会复用，字幕和讲义不变。","notice")
+        layout.addWidget(self.dub_status)
+        advanced=QCheckBox("高级：声音、语速与时间限制（通常无需修改）")
+        layout.addWidget(advanced)
         group = QGroupBox("默认声音与本地服务")
         form = QFormLayout(group)
         self.voice_summary = label("")
         form.addRow("当前声音", self.voice_summary)
         form.addRow(button("设置声音与语速", self._settings))
+        self.auto_timing=QCheckBox("自动匹配节奏：同一说话人的相邻句共享时间（推荐）")
+        self.auto_timing.setChecked(True)
+        self.auto_timing.toggled.connect(self._reload_issues)
+        form.addRow(self.auto_timing)
         self.alignment_speed = QComboBox()
         for caption, speed in (("自然（最高 1.15 倍）", 1.15), ("紧凑（最高 1.35 倍）", 1.35), ("快速（最高 1.50 倍）", 1.5)):
             self.alignment_speed.addItem(caption, speed)
@@ -538,6 +553,8 @@ class MainWindow(QMainWindow):
         self.alignment_speed.setMinimumHeight(32)
         self.alignment_gap.setMinimumHeight(32)
         layout.addWidget(group)
+        group.hide()
+        advanced.toggled.connect(group.setVisible)
         self.speaker_table = QTableWidget(0, 4)
         self.speaker_table.setHorizontalHeaderLabels(["说话人", "片段数", "配音方式 / 声音", "参考原声"])
         self.speaker_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -548,8 +565,8 @@ class MainWindow(QMainWindow):
         for column in (0, 1, 3):
             self.speaker_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self.speaker_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.speaker_table.setMinimumHeight(145)
-        self.speaker_table.setMaximumHeight(270)
+        self.speaker_table.setMinimumHeight(90)
+        self.speaker_table.setMaximumHeight(170)
         self.speaker_table.itemDoubleClicked.connect(self._edit_speaker)
         layout.addWidget(self.speaker_table, 1)
         speakers_row = QHBoxLayout()
@@ -561,16 +578,7 @@ class MainWindow(QMainWindow):
         speakers_row.addStretch()
         layout.addLayout(speakers_row)
         layout.addWidget(label("可在校对页为每段指定说话人。原声音色需 3–10 秒单人清晰参考原声及本机 GPT-SoVITS 服务；多人同时讲话暂需人工校对，声音相似度需试听确认。", "description"))
-        row = QHBoxLayout()
-        row.addWidget(self._stage_button("按说话人生成配音", "dub", True))
-        self.listen_dub_button = button("试听最新配音", self._listen_dub)
-        self.listen_dub_button.setEnabled(False)
-        row.addWidget(self.listen_dub_button)
-        row.addStretch()
-        layout.addLayout(row)
-        self.dub_status = label("尚未生成配音。请先校对片段中的“配音 · 实际读法”。", "notice")
-        layout.addWidget(self.dub_status)
-        layout.addWidget(label("配音时长问题 · 双击直接修改读法或合并相邻句", "description"))
+        layout.addWidget(label("自动处理后的剩余问题 · 可对比原声、自然译声和调整后译声", "description"))
         self.dub_issues = QListWidget()
         self.dub_issues.setWordWrap(True)
         self.dub_issues.setMinimumHeight(90)
@@ -589,6 +597,8 @@ class MainWindow(QMainWindow):
         self.dub_player = QMediaPlayer(self)
         self.dub_audio = QAudioOutput(self)
         self.dub_player.setAudioOutput(self.dub_audio)
+        self.dub_player.mediaStatusChanged.connect(self._dub_media_status)
+        self.dub_player.positionChanged.connect(self._dub_position)
         self.dub_player.errorOccurred.connect(lambda _error, message: self._log("试听：" + message))
         layout.addStretch()
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
@@ -1245,6 +1255,15 @@ class MainWindow(QMainWindow):
         # run on every keystroke save. Refresh when their page is visible.
         if new_project_id != old_project_id or self.tabs.currentIndex() in (2, 4):
             self._refresh_issues()
+        if new_project_id != old_project_id and project and self.coordinator.project_dir:
+            from mathbridge.storage.project_store import ProjectStore
+            from mathbridge.domain.project import safe_path
+            master=ProjectStore(self.coordinator.project_dir).read("runtime.json",{}).get("metadata",{}).get("dub_master",{})
+            if master.get("input_fingerprint")==self._alignment_report.get("input_fingerprint") and master.get("path"):
+                path=safe_path(Path(self.coordinator.project_dir),master["path"])
+                if path.is_file():
+                    self._latest_audio=str(path)
+                    self.listen_dub_button.setEnabled(True)
 
     def _refresh_segment_table(self, *_):
         current_id = self._segment_id
@@ -1584,7 +1603,8 @@ class MainWindow(QMainWindow):
         return options
 
     def _alignment_options(self):
-        return dict(alignment_max_speed=self.alignment_speed.currentData(), alignment_borrow_ms=self.alignment_gap.currentData())
+        return dict(alignment_max_speed=self.alignment_speed.currentData(), alignment_borrow_ms=self.alignment_gap.currentData(),
+                    alignment_mode="adaptive" if self.auto_timing.isChecked() else "strict")
 
     def _reload_issues(self, *_):
         self._issues_key = None
@@ -1594,7 +1614,7 @@ class MainWindow(QMainWindow):
     def _refresh_issues(self, *_):
         key = ((self._project or {}).get("project_id"), (self._project or {}).get("revision"),
                tuple(key for key, check in self.format_checks.items() if check.isChecked()),
-               self.alignment_speed.currentData(), self.alignment_gap.currentData(),
+               self.alignment_speed.currentData(), self.alignment_gap.currentData(),self.auto_timing.isChecked(),
                self.coordinator.settings.get("voice"), self.coordinator.settings.get("speech_rate"))
         if self._issues_key == key:
             return
@@ -1657,7 +1677,10 @@ class MainWindow(QMainWindow):
         measured = self._alignment_report.get("measured_count", 0)
         missing = self._alignment_report.get("missing_count", 0)
         if measured:
-            self.dub_status.setText(f"已检查 {measured} 句缓存配音，{problems} 句仍放不下；已利用可用停顿。" + (f"另有 {missing} 句需生成新配音。" if missing else "") + " 可先自动整理分段，再重新生成。")
+            self.dub_status.setText(f"已测量 {measured} 句，剩余 {problems} 句需处理；"
+                f"调整停顿 {self._alignment_report.get('pause_compacted_count',0)} 句，共享时间 {self._alignment_report.get('shifted_count',0)} 句，"
+                f"局部加速 {self._alignment_report.get('accelerated_count',0)} 句。" +
+                (f"另有 {missing} 句需生成。" if missing else "可集中试听剩余问题，或抽查自动处理结果。"))
         if not problems:
             self.dub_issues.addItem("暂无已知时长问题。新合成的配音会在生成时重新测量。")
         else:
@@ -1736,6 +1759,28 @@ class MainWindow(QMainWindow):
         issue = item.data(Qt.ItemDataRole.UserRole)
         if issue:
             self._navigate_issue(issue)
+
+    def _show_dub_review(self):
+        self._reload_issues()
+        if not self._project or not self._alignment_report.get("plans"):
+            self.dub_status.setText("请先生成配音，再集中试听或抽查。");return
+        DubbingReviewDialog(self._project,self._alignment_report,self._listen_review_clip,self._repair_spoken,self).exec()
+
+    def _listen_review_clip(self,identifier,kind):
+        if not self._commit_all():return
+        segment=self._segment(identifier)
+        if kind=="matched":
+            self._run("dub",dict(segment_ids=[identifier],sample_only=True,timing_sample=True));return
+        from mathbridge.domain.project import segment_fingerprint,safe_path
+        path=(Path(self.coordinator.source_path) if kind=="original" else
+              safe_path(Path(self.coordinator.project_dir),f"audio/tts/{segment_fingerprint(self._project,segment,self.coordinator.settings)}.wav"))
+        if not path.is_file():
+            self._show_error("音频未找到，请先生成配音或重连原视频。");return
+        self.player.pause()
+        self._dub_clip_end=segment["end_ms"] if kind=="original" else None
+        self._dub_clip_start=segment["start_ms"] if kind=="original" else 0
+        self.dub_player.setSource(QUrl.fromLocalFile(str(path)))
+        self.dub_player.play()
 
     def _repair_selected_dub(self):
         item = self.dub_issues.currentItem()
@@ -1880,6 +1925,8 @@ class MainWindow(QMainWindow):
                 self._frame_time = self._frame_requested_ms
                 self._display_frame(path)
             if suffix == ".wav" and stage in {"dub", "preview"} and not dub_audio_found:
+                self._dub_clip_end=None
+                self._dub_clip_start=None
                 dub_audio_found = True
                 self._latest_audio = path
                 self.listen_dub_button.setEnabled(True)
@@ -1891,6 +1938,8 @@ class MainWindow(QMainWindow):
                     self.dub_player.setSource(QUrl.fromLocalFile(path))
                     self.dub_player.play()
             if suffix == ".wav" and stage == "speaker_reference" and not payload.get("metadata", {}).get("stale"):
+                self._dub_clip_end=None
+                self._dub_clip_start=None
                 self.player.pause()
                 self.dub_player.setSource(QUrl.fromLocalFile(path))
                 self.dub_player.play()
@@ -1906,6 +1955,8 @@ class MainWindow(QMainWindow):
             self._refresh_project(self.coordinator.project)
         if stage == "preview" and not payload.get("metadata", {}).get("stale"):
             self.stage_label.setText("待校对预览已生成 · 在最近文件中双击 preview.mp4 播放")
+        if stage in {"dub","preview"}:
+            self._issues_key=None
         self._refresh_issues()
         if stage in {"transcribe", "import_subtitles", "sentences", "translate"} and self._project and not metadata.get("stale"):
             self._focus_pending_segment()
@@ -1948,6 +1999,8 @@ class MainWindow(QMainWindow):
 
     def _listen_dub(self):
         if self._latest_audio:
+            self._dub_clip_end=None
+            self._dub_clip_start=None
             self.player.pause()
             if self.dub_player.source().toLocalFile() != self._latest_audio:
                 self.dub_player.setSource(QUrl.fromLocalFile(self._latest_audio))
@@ -1955,6 +2008,18 @@ class MainWindow(QMainWindow):
                 self.dub_player.pause()
             else:
                 self.dub_player.play()
+
+    def _dub_media_status(self,status):
+        start=getattr(self,"_dub_clip_start",None)
+        if start is not None and status in {QMediaPlayer.MediaStatus.LoadedMedia,QMediaPlayer.MediaStatus.BufferedMedia}:
+            self._dub_clip_start=None
+            self.dub_player.setPosition(start)
+
+    def _dub_position(self,position):
+        end=getattr(self,"_dub_clip_end",None)
+        if end is not None and position>=end:
+            self.dub_player.pause()
+            self._dub_clip_end=None
 
     def _player_position(self, value):
         if self._playback_stop_ms is not None and value >= self._playback_stop_ms:

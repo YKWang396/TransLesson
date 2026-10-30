@@ -624,6 +624,11 @@ class Coordinator(QObject):
         runtime = store.read("runtime.json", {"stages": {}})
         metadata = result.get("metadata", {})
         runtime.setdefault("metadata", {})[stage] = metadata
+        if stage=="dub" and not metadata.get("sample") and metadata.get("alignment"):
+            mix=next((a for a in result.get("artifacts",[]) if a["kind"]=="mix"),None)
+            if mix:
+                runtime["metadata"]["dub_master"]=dict(path=mix["path"],
+                    input_fingerprint=metadata["alignment"]["input_fingerprint"])
         store.write("runtime.json", runtime)
         self._usage = runtime.get("usage", {})
         self._set_runtime("succeeded")

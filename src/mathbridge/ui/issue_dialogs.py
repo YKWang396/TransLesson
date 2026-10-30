@@ -3,8 +3,83 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPlainTextEdit,
-    QPushButton, QVBoxLayout,
+    QPushButton, QVBoxLayout, QComboBox, QListWidget, QListWidgetItem,
 )
+from PySide6.QtCore import Qt
+
+
+class DubbingReviewDialog(QDialog):
+    """One listening queue for residual problems and optional spot checks."""
+    def __init__(self,project,report,listen,edit,parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("配音抽查 · 自动处理后只看剩余问题")
+        self.resize(880,650)
+        self.segments = {s["id"]:s for s in project["segments"]}
+        self.report,self.listen,self.edit = report,listen,edit
+        self.problems = {i["segment_id"]:i for i in report.get("issues",[])}
+        layout=QVBoxLayout(self)
+        summary=QLabel(f"已测量 {report.get('measured_count',0)} 句，剩余 {len(self.problems)} 句需处理。自动处理结果可抽查，无需逐句确认。")
+        summary.setWordWrap(True);layout.addWidget(summary)
+        self.filter=QComboBox()
+        for text,value in (("仅剩余问题","problems"),("已自动调整，供抽查","adjusted"),("全部已生成配音","all")):
+            self.filter.addItem(text,value)
+        layout.addWidget(self.filter)
+        self.listing=QListWidget();layout.addWidget(self.listing,1)
+        self.context=QPlainTextEdit();self.context.setReadOnly(True);self.context.setMaximumHeight(175)
+        layout.addWidget(self.context)
+        row=QHBoxLayout()
+        self.controls=[]
+        for title,kind in (("听原声","original"),("听自然译声","natural"),("听调整后译声","matched")):
+            control=QPushButton(title);control.clicked.connect(lambda _=False,k=kind:self._listen(k))
+            row.addWidget(control);self.controls.append(control)
+        self.modify=QPushButton("修改这句读法");self.modify.clicked.connect(self._edit)
+        row.addWidget(self.modify);layout.addLayout(row)
+        nav=QHBoxLayout()
+        for title,step in (("上一句",-1),("下一句",1)):
+            control=QPushButton(title);control.clicked.connect(lambda _=False,d=step:self.listing.setCurrentRow(max(0,min(self.listing.count()-1,self.listing.currentRow()+d))))
+            nav.addWidget(control)
+        close=QPushButton("关闭");close.clicked.connect(self.accept);nav.addWidget(close);layout.addLayout(nav)
+        self.filter.currentIndexChanged.connect(self._load)
+        self.listing.currentItemChanged.connect(self._selected)
+        self.filter.setCurrentIndex(0 if self.problems else 1)
+        self._load()
+
+    def _load(self,*_):
+        self.listing.clear()
+        mode=self.filter.currentData()
+        for plan in self.report.get("plans",[]):
+            identifier=plan["segment_id"]
+            adjusted=plan.get("pause_saved_ms",0)>20 or abs(plan.get("shift_ms",0))>20 or plan["speed"]>1.005
+            if (mode=="problems" and identifier not in self.problems) or (mode=="adjusted" and not adjusted):continue
+            segment=self.segments[identifier]
+            title=f"第 {plan['index']} 句 · {segment['subtitle_plain'][:70]}"
+            item=QListWidgetItem(title);item.setData(Qt.ItemDataRole.UserRole,plan);self.listing.addItem(item)
+        self.listing.setCurrentRow(0)
+        self._selected()
+
+    def _selected(self,*_):
+        item=self.listing.currentItem()
+        for control in self.controls+[self.modify]:control.setEnabled(bool(item))
+        if not item:
+            self.context.setPlainText("这个队列没有需要检查的句子。");return
+        plan=item.data(Qt.ItemDataRole.UserRole);segment=self.segments[plan["segment_id"]]
+        issue=self.problems.get(segment["id"])
+        text=(f"原文：{segment['source_text']}\n字幕：{segment['subtitle_plain']}\n配音读法：{segment['tts_text']}\n"
+              f"自然译声 {plan.get('original_speech_ms',plan['speech_ms'])/1000:.2f} 秒 → 停顿处理后 {plan['speech_ms']/1000:.2f} 秒；"
+              f"局部语速 {plan['speed']:.2f} 倍，起点移动 {plan.get('shift_ms',0)/1000:+.2f} 秒。")
+        if issue:text+='\n'+issue['message']
+        self.context.setPlainText(text)
+
+    def _listen(self,kind):
+        item=self.listing.currentItem()
+        if item:self.listen(item.data(Qt.ItemDataRole.UserRole)["segment_id"],kind)
+
+    def _edit(self):
+        item=self.listing.currentItem()
+        if item:
+            identifier=item.data(Qt.ItemDataRole.UserRole)["segment_id"]
+            issue=self.problems.get(identifier,dict(segment_id=identifier,message="可选修订；字幕保持原样。"))
+            self.accept();self.edit(issue)
 
 
 class SpokenTextDialog(QDialog):

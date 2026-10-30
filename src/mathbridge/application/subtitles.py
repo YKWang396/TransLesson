@@ -12,9 +12,12 @@ def timestamp(ms: int, separator=",") -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
 
 
-def build_cues(project: dict) -> list[dict]:
+def build_cues(project: dict, timing=None) -> list[dict]:
     cues = []
+    timing = {t["segment_id"]:t for t in timing or []}
     for segment in sorted(project["segments"], key=lambda x: x["start_ms"]):
+        if segment["id"] in timing:
+            segment = dict(segment,**{k:timing[segment["id"]][k] for k in ("start_ms","end_ms")})
         text = segment["subtitle_plain"].strip()
         if not text:
             raise ValueError(f"MISSING_TRANSLATION: {segment['id']} 字幕为空")
@@ -39,9 +42,9 @@ def build_cues(project: dict) -> list[dict]:
     return cues
 
 
-def write_subtitles(project: dict, directory: Path) -> tuple[list[dict], dict[str, Path]]:
+def write_subtitles(project: dict, directory: Path, timing=None) -> tuple[list[dict], dict[str, Path]]:
     directory.mkdir(parents=True, exist_ok=True)
-    cues = build_cues(project)
+    cues = build_cues(project,timing)
     outputs = {}
     for ext, separator in (("srt", ","), ("vtt", ".")):
         text = "WEBVTT\n\n" if ext == "vtt" else ""
@@ -59,6 +62,16 @@ def write_subtitles(project: dict, directory: Path) -> tuple[list[dict], dict[st
     outputs["ass"] = directory / "lesson.ass"
     outputs["ass"].write_text(header, encoding="utf-8-sig", newline="\n")
     return cues, outputs
+
+
+def dubbing_timing(plans, duration_ms):
+    result = []
+    for i,plan in enumerate(plans):
+        start = round(plan.get("aligned_start_ms",plan["start_ms"]))
+        next_start = round(plans[i+1].get("aligned_start_ms",plans[i+1]["start_ms"])) if i+1 < len(plans) else duration_ms
+        end = min(next_start,max(plan["end_ms"],round(start+plan["speech_ms"]/plan["speed"])))
+        result.append(dict(segment_id=plan["segment_id"],start_ms=start,end_ms=end))
+    return result
 
 
 TIMING = re.compile(r"(?:(\d{1,3}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,3}):)?(\d{2}):(\d{2})[,.](\d{3})")

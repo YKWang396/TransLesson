@@ -16,11 +16,14 @@ def alignment_options(options=None):
     options = options or {}
     speed = options.get("alignment_max_speed", DEFAULT_MAX_SPEED)
     borrow = options.get("alignment_borrow_ms", DEFAULT_BORROW_MS)
+    mode = options.get("alignment_mode", "adaptive")
+    if mode not in ("adaptive", "strict"):
+        raise ValueError("INVALID_ALIGNMENT: 未知时长适配模式")
     if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 1 <= speed <= 1.5:
         raise ValueError("INVALID_ALIGNMENT: 配音加速上限须为 1.00–1.50 倍")
     if isinstance(borrow, bool) or not isinstance(borrow, int) or not 0 <= borrow <= 2000:
         raise ValueError("INVALID_ALIGNMENT: 可借用的句后停顿须为 0–2000 毫秒")
-    return dict(alignment_max_speed=float(speed), alignment_borrow_ms=borrow)
+    return dict(alignment_max_speed=float(speed), alignment_borrow_ms=borrow, alignment_mode=mode)
 
 
 def time_label(ms):
@@ -54,6 +57,8 @@ def plan_alignment(clips, duration_ms, options=None):
     """
     config = alignment_options(options)
     ordered = sorted(clips, key=lambda clip: clip["start_ms"])
+    if config["alignment_mode"] == "adaptive" and ordered and all(c.get("speaker_id") for c in ordered):
+        return _adaptive(ordered, duration_ms, config)
     plans, issues = [], []
     previous_end = 0
     if duration_ms <= 0:
@@ -80,8 +85,76 @@ def plan_alignment(clips, duration_ms, options=None):
     return plans, issues
 
 
+def _adaptive(clips, duration_ms, config):
+    # Validate using the strict planner first; its bounds remain the fallback.
+    fixed, fixed_issues = plan_alignment(clips, duration_ms, dict(config, alignment_mode="strict"))
+    groups = []
+    for clip in fixed:
+        if (not groups or clip["speaker_id"] != groups[-1][-1]["speaker_id"]
+                or clip["start_ms"]-groups[-1][-1]["end_ms"] > 2000
+                or clip["start_ms"] > groups[-1][-1].get("limit_end_ms",clip["start_ms"])):
+            groups.append([])
+        groups[-1].append(clip)
+    plans, issues = [], []
+    for group in groups:
+        count = len(group)
+        begin = group[0]["start_ms"]
+        finish = group[-1]["available_end_ms"]
+        release = [max(begin,c["start_ms"]-2000) for c in group]
+        deadline = [min(finish,c["start_ms"]+2000) for c in group]
+        pauses = [min(180,max(0,b["start_ms"]-a["end_ms"])) for a,b in zip(group,group[1:])] + [0]
+        natural = [c["speech_ms"] for c in group]
+        # Reserve codec rounding headroom instead of planning at the exact cap.
+        lengths = [min(n,n/config["alignment_max_speed"]+30) for n in natural]
+
+        def feasible():
+            position = begin
+            for i in range(count):
+                position = max(position,release[i])
+                if position > deadline[i]+.01:
+                    return False
+                position += lengths[i]+pauses[i]
+            return position <= finish+.01
+
+        if not feasible():
+            plans.extend(group)
+            ids = {c["segment_id"] for c in group}
+            issues.extend(i for i in fixed_issues if i.get("segment_id") in ids)
+            continue
+        # Relax each sentence toward its natural duration while preserving a
+        # feasible schedule. Easy sentences keep their natural pace first.
+        for i in sorted(range(count),key=lambda i:natural[i]/max(1,group[i]["end_ms"]-group[i]["start_ms"])):
+            low, high = lengths[i], natural[i]
+            lengths[i] = high
+            if not feasible():
+                for _ in range(20):
+                    middle = (low+high)/2
+                    lengths[i] = middle
+                    if feasible(): low = middle
+                    else: high = middle
+                lengths[i] = low
+        latest = [0.]*count
+        limit = finish
+        for i in range(count-1,-1,-1):
+            latest[i] = min(deadline[i],limit-lengths[i])
+            limit = latest[i]-pauses[i-1] if i else begin
+        starts, position = [], begin
+        for i,c in enumerate(group):
+            start = max(position,release[i],min(c["start_ms"],latest[i]))
+            starts.append(start)
+            position = start+lengths[i]+pauses[i]
+        for i,c in enumerate(group):
+            end = starts[i+1]-pauses[i] if i+1 < count else finish
+            available = max(.001,end-starts[i])
+            plans.append(dict(c, aligned_start_ms=starts[i], shift_ms=round(starts[i]-c["start_ms"],3),
+                              available_end_ms=end, available_ms=available,
+                              borrowed_ms=max(0,end-c["end_ms"]),
+                              speed=max(1.,natural[i]/available)))
+    return plans, issues
+
+
 def alignment_fingerprint(project, settings, options=None):
-    return fingerprint(dict(version="bounded-gap-1", source=project["source"]["sha256"],
+    return fingerprint(dict(version="adaptive-rhythm-1", source=project["source"]["sha256"],
                             duration_ms=project["source"]["duration_ms"],
                             segments=[dict(id=s["id"], start_ms=s["start_ms"], end_ms=s["end_ms"],
                                            tts=segment_fingerprint(project, s, settings))
@@ -161,8 +234,20 @@ def cached_alignment_report(project, settings, root, options=None):
         except (OSError, ValueError, EOFError, wave.Error, ZeroDivisionError):
             missing.append(segment["id"])
             continue
+        original_ms, saved_ms = speech_ms, 0
+        if config["alignment_mode"] == "adaptive":
+            from .dubbing import timing_path
+            prepared = timing_path(root,project,segment,settings)
+            try:
+                timing = json.loads(prepared.with_suffix(".json").read_text(encoding="utf8"))
+                if prepared.is_file() and timing["raw_sha256"] == marker["sha256"]:
+                    speech_ms, saved_ms = timing["duration_ms"],timing["saved_ms"]
+                    path = prepared
+            except (OSError,ValueError,KeyError,TypeError):
+                pass
         clips.append(dict(segment_id=segment["id"], index=index + 1, path=str(path),
                           start_ms=segment["start_ms"], end_ms=segment["end_ms"], speech_ms=speech_ms,
+                          speaker_id=segment["speaker_id"],original_speech_ms=original_ms,pause_saved_ms=saved_ms,
                           limit_end_ms=segments[index + 1]["start_ms"] if index + 1 < len(segments)
                           else project["source"]["duration_ms"]))
     plans, issues = plan_alignment(clips, project["source"]["duration_ms"], config)
@@ -171,7 +256,11 @@ def cached_alignment_report(project, settings, root, options=None):
                 measured_count=len(plans), missing_count=len(missing), missing_segment_ids=missing,
                 borrowed_count=sum(plan["speech_ms"] > plan["end_ms"] - plan["start_ms"]
                                    and plan["speed"] <= config["alignment_max_speed"] for plan in plans),
-                estimated=True, **suggest_merges(project, {clip["segment_id"]: clip["speech_ms"] for clip in clips}, config))
+                estimated=True, plans=plans,
+                pause_compacted_count=sum(c.get("pause_saved_ms",0)>20 for c in plans),
+                shifted_count=sum(abs(c.get("shift_ms",0))>20 for c in plans),
+                accelerated_count=sum(c["speed"]>1.005 for c in plans),
+                **suggest_merges(project, {clip["segment_id"]: clip["speech_ms"] for clip in clips}, config))
 
 
 # Kept as an explicit read-only entry point for UI and diagnostics.
