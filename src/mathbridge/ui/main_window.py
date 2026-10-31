@@ -550,8 +550,9 @@ class MainWindow(QMainWindow):
         self.auto_timing.toggled.connect(self._reload_issues)
         form.addRow(self.auto_timing)
         self.alignment_speed = QComboBox()
-        for caption, speed in (("自然（最高 1.15 倍）", 1.15), ("紧凑（最高 1.35 倍）", 1.35), ("快速（最高 1.50 倍）", 1.5)):
+        for caption, speed in (("自动（按句匹配，上限 1.50 倍）", 1.5), ("自然（上限 1.15 倍）", 1.15), ("紧凑（上限 1.35 倍）", 1.35)):
             self.alignment_speed.addItem(caption, speed)
+        self.alignment_speed.setToolTip("这是局部加速上限；程序优先使用自然速度与前后停顿，只调整确实放不下的句子。")
         self.alignment_gap = QComboBox()
         for caption, value in (("利用句后停顿，最多 1 秒", 1000), ("利用句后停顿，最多 2 秒", 2000), ("严格使用原句时间", 0)):
             self.alignment_gap.addItem(caption, value)
@@ -602,7 +603,7 @@ class MainWindow(QMainWindow):
         self.regroup_dub_button = button("自动整理配音分段", self._regroup_dub)
         self.regroup_dub_button.setToolTip("根据已有配音时长合并被切碎的相邻语句；保留字幕、公式和讲义引用，可撤销，无需调用翻译 API。")
         repair_row.addWidget(self.regroup_dub_button)
-        repair_row.addWidget(button("重新检查时长", self._reload_issues))
+        repair_row.addWidget(button("刷新配音问题", self._reload_issues))
         repair_row.addStretch()
         layout.addLayout(repair_row)
         self.dub_player = QMediaPlayer(self)
@@ -736,7 +737,7 @@ class MainWindow(QMainWindow):
             self._notify_unsaved_action()
             return
         try:
-            if stage in {"dub", "preview", "export"}:
+            if stage in {"dub", "preview", "export", "pipeline"}:
                 options = {**self._alignment_options(), **(options or {})}
             if stage == "frame":
                 self._frame_requested_ms = (options or {}).get("time_ms", self.player.position())
@@ -1645,7 +1646,7 @@ class MainWindow(QMainWindow):
 
     def _restore_alignment_options(self,root):
         from mathbridge.application.alignment import alignment_options
-        config=alignment_options()
+        config=alignment_options({"alignment_max_speed":1.5})
         try:
             path=root/"audio/alignment-issues.json"
             if path.stat().st_size <= 10_000_000:
@@ -1711,8 +1712,10 @@ class MainWindow(QMainWindow):
             item.setToolTip(issue.get("context", "") + "\n点击“处理选中问题”，或双击此项。")
             item.setForeground(QColor("#a45440" if issue.get("severity") == "error" else "#8b733b"))
             self.issues.addItem(item)
-            if issue.get("code") == "TTS_TOO_LONG":
-                copy_item = QListWidgetItem(f"{issue['location']} · 配音 {issue['speech_ms']/1000:.2f} 秒 / 可用 {issue['available_ms']/1000:.2f} 秒\n{issue.get('context', '')}")
+            if issue.get("code") in {"TTS_TOO_LONG", "TTS_SILENT", "TTS_INCOMPLETE"}:
+                detail = (f"配音 {issue['speech_ms']/1000:.2f} 秒 / 可用 {issue['available_ms']/1000:.2f} 秒"
+                          if issue["code"] == "TTS_TOO_LONG" else "检测到静音或疑似漏读，请重新生成配音")
+                copy_item = QListWidgetItem(f"{issue['location']} · {detail}\n{issue.get('context', '')}")
                 copy_item.setData(Qt.ItemDataRole.UserRole, issue)
                 copy_item.setToolTip(issue["message"])
                 self.dub_issues.addItem(copy_item)
@@ -1733,11 +1736,14 @@ class MainWindow(QMainWindow):
         measured = self._alignment_report.get("measured_count", 0)
         missing = self._alignment_report.get("missing_count", 0)
         if measured:
-            self.dub_status.setText(f"已测量 {measured} 句 · 待处理 {problems} 句"+(f" · 待生成 {missing} 句" if missing else ""))
+            verified = self._alignment_report.get('content_verified_count',0)
+            checked = f"已回听检查 {verified} 句" if verified == measured else f"已测量 {measured} 句"
+            self.dub_status.setText(f"{checked} · 待处理 {problems} 句"+(f" · 待生成 {missing} 句" if missing else ""))
             self.dub_status.setToolTip(f"调整停顿 {self._alignment_report.get('pause_compacted_count',0)} 句，"
-                f"共享时间 {self._alignment_report.get('shifted_count',0)} 句，局部加速 {self._alignment_report.get('accelerated_count',0)} 句。")
+                f"共享时间 {self._alignment_report.get('shifted_count',0)} 句，局部加速 {self._alignment_report.get('accelerated_count',0)} 句。"
+                f"本地回听 {verified} 句；未回听的文件只检查格式或信号，不代表文字已读完整。")
         if not problems:
-            self.dub_issues.addItem("没有需要处理的时长问题")
+            self.dub_issues.addItem("没有需要处理的配音问题")
         else:
             self.dub_issues.setCurrentRow(0)
         self.repair_dub_button.setEnabled(bool(problems) and not self._view_busy)
@@ -1767,7 +1773,10 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(1)
         if self._segment(identifier):
             self._select_segment(identifier)
-        if issue.get("action") == "formula":
+        if issue.get("action") == "regenerate_tts":
+            self.tabs.setCurrentIndex(2)
+            self.dub_status.setText("此句检测到静音或疑似漏读。点击“自动生成并匹配配音”重试，已通过的句子会复用。")
+        elif issue.get("action") == "formula":
             self.advanced_toggle.setChecked(True)
             for row in range(self.formula_list.count()):
                 if self.formula_list.item(row).data(Qt.ItemDataRole.UserRole) == issue.get("formula_id"):
@@ -2022,9 +2031,10 @@ class MainWindow(QMainWindow):
         self.stage_label.setText(f"{STAGES.get(stage, stage)}未完成 · {str(message)[:90]}")
         self._log(f"{stage}: {message}")
         self.log.show()
-        if stage in {"dub", "export", "preview"} and ("TTS_TOO_LONG" in message or "EXPORT_BLOCKED" in message):
+        if stage in {"dub", "export", "preview"} and any(code in message for code in (
+                "TTS_TOO_LONG", "TTS_CONTENT_ISSUES", "TTS_SILENT", "TTS_INCOMPLETE", "EXPORT_BLOCKED")):
             self._reload_issues()
-            self.tabs.setCurrentIndex(2 if "TTS_TOO_LONG" in message else 4)
+            self.tabs.setCurrentIndex(2 if "TTS_" in message else 4)
             self.stage_label.setText("处理未完成 · 已列出问题句和时间，选中后点击处理")
             return
         if stage in {"transcribe", "create", "diarize"}:

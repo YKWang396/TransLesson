@@ -12,6 +12,25 @@ def timestamp(ms: int, separator=",") -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
 
 
+def _caption_chunks(text, width):
+    """Prefer clause punctuation over a hard character-count cue boundary."""
+    remaining, chunks = text.strip(), []
+    capacity = width * 2
+    while len(remaining) > capacity:
+        candidates = [m.end() for m in re.finditer(r"[。！？!?；;，,：:]\s*|\s+", remaining[:capacity+1])
+                      if width // 2 <= m.end() <= capacity]
+        stop = candidates[-1] if candidates else capacity
+        # Avoid a two-character flash at the end of an otherwise readable cue.
+        if len(remaining) - stop < width // 2 and len(candidates) > 1:
+            stop = candidates[-2]
+        chunks.append(remaining[:stop].strip())
+        remaining = remaining[stop:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return ["\n".join(textwrap.wrap(chunk, width=width, break_long_words=True,
+                                  break_on_hyphens=False)) for chunk in chunks]
+
+
 def build_cues(project: dict, timing=None) -> list[dict]:
     cues = []
     timing = {t["segment_id"]:t for t in timing or []}
@@ -23,10 +42,7 @@ def build_cues(project: dict, timing=None) -> list[dict]:
             raise ValueError(f"MISSING_TRANSLATION: {segment['id']} 字幕为空")
         # One semantic segment may own several readable cues; no TTS dependency here.
         width = 20 if project["languages"]["target"] == "zh-CN" else 42
-        lines = []
-        for line in text.splitlines():
-            lines.extend(textwrap.wrap(line, width=width, break_long_words=True, break_on_hyphens=False) or [line])
-        chunks = ["\n".join(lines[i:i + 2]) for i in range(0, len(lines), 2)]
+        chunks = _caption_chunks(" ".join(text.splitlines()), width)
         total_weight = sum(len(chunk) for chunk in chunks)
         cursor = segment["start_ms"]
         accumulated = 0

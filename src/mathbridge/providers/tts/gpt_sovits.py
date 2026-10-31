@@ -216,7 +216,8 @@ def probe(endpoint=DEFAULT_ENDPOINT, *, timeout=5, cancel=None):
 
 def synthesize(text, language, reference_audio, reference_text, reference_language,
                output_path, *, endpoint=DEFAULT_ENDPOINT, speed=1.0, timeout=180,
-               cancel=None, auxiliary_reference_audio=()) -> Path:
+               cancel=None, auxiliary_reference_audio=(), verify=None, retry_notice=None, seed=1,
+               fallback_reference=None) -> Path:
     """Generate a target-language WAV using one speaker's original reference.
 
     The caller must extract a 3–10 second single-speaker WAV into its project
@@ -224,6 +225,8 @@ def synthesize(text, language, reference_audio, reference_text, reference_langua
     """
     _check(cancel)
     _endpoint(endpoint)
+    if type(seed) is not int or not 0 <= seed < 2**32:
+        raise MediaError("INVALID_VOICE", "无效的声音生成随机种子。")
     if not isinstance(text, str) or not text.strip() or len(text) > 20000:
         raise MediaError("INVALID_TRANSLATION", "参考原声配音读法须为 1–20,000 字符。")
     if not isinstance(reference_text, str) or not reference_text.strip() or len(reference_text) > 5000:
@@ -257,26 +260,53 @@ def synthesize(text, language, reference_audio, reference_text, reference_langua
                "ref_audio_path": str(reference), "prompt_text": reference_text.strip(),
                "prompt_lang": reference_language, "media_type": "wav",
                "streaming_mode": False, "speed_factor": float(speed),
-               "batch_size": 1, "text_split_method": "cut5", "seed": 0}
+               "batch_size": 1, "text_split_method": "cut0", "seed": 1}
     if auxiliary:
         payload["aux_ref_audio_paths"] = auxiliary
-    content_type, data = _request(endpoint, "POST", "/tts", payload=payload,
-                                  timeout=timeout, cancel=cancel)
-    if content_type not in ("audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream"):
-        raise MediaError("TTS_FAILED", "参考原声服务未返回 WAV 音频，请检查服务错误日志。")
-    if not data.startswith(b"RIFF") or data[8:12] != b"WAVE":
-        raise MediaError("TTS_FAILED", "参考原声服务返回了无效 WAV。")
-    _check(cancel)
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(f".{output.stem}-{uuid.uuid4().hex}.tmp.wav")
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _wav_info(temporary)
+    for attempt in range(5):
         _check(cancel)
-        os.replace(temporary, output)
-    finally:
-        temporary.unlink(missing_ok=True)
+        payload["seed"] = (seed + attempt) % 2**32
+        if attempt >= 3:
+            # A second inference path is useful when short utterances repeatedly
+            # decode to mute. The local API supports these explicit controls.
+            payload.update(parallel_infer=False, use_cuda_graph=False)
+            if attempt == 3 and fallback_reference:
+                fallback = fallback_reference()
+                if fallback:
+                    target_reference, target_text, target_language = fallback
+                    target_reference = Path(target_reference).resolve(strict=True)
+                    _wav_info(target_reference, reference=True)
+                    if target_reference == output or not isinstance(target_text, str) or not target_text.strip():
+                        raise MediaError("INVALID_REFERENCE", "短句重试参考无效。")
+                    payload.update(ref_audio_path=str(target_reference), prompt_text=target_text,
+                                   prompt_lang=_language(target_language))
+                    payload["aux_ref_audio_paths"] = list(dict.fromkeys([str(reference)] + auxiliary))[:3]
+        content_type, data = _request(endpoint, "POST", "/tts", payload=payload,
+                                      timeout=timeout, cancel=cancel)
+        if content_type not in ("audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream"):
+            raise MediaError("TTS_FAILED", "参考原声服务未返回 WAV 音频，请检查服务错误日志。")
+        if not data.startswith(b"RIFF") or data[8:12] != b"WAVE":
+            raise MediaError("TTS_FAILED", "参考原声服务返回了无效 WAV。")
+        temporary = output.with_name(f".{output.stem}-{uuid.uuid4().hex}.tmp.wav")
+        try:
+            with temporary.open("xb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            _wav_info(temporary)
+            from mathbridge.application.speech_quality import signal_quality
+            signal_quality(temporary, cancel)
+            if verify:
+                verify(temporary)
+            _check(cancel)
+            os.replace(temporary, output)
+            break
+        except MediaError as error:
+            if error.code not in {"TTS_SILENT", "TTS_INCOMPLETE"} or attempt == 4:
+                raise
+            if retry_notice:
+                retry_notice(attempt + 2, error.code)
+        finally:
+            temporary.unlink(missing_ok=True)
     return output

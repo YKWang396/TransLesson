@@ -12,6 +12,7 @@ from mathbridge.domain.project import validate_project
 from mathbridge.math.plain import display_math
 from mathbridge.providers.translation.client import TranslationError
 from mathbridge.providers.translation.course import organize_sentences, generate_handout
+from mathbridge.providers.translation.course import review_sentence_boundaries
 from mathbridge.providers.translation.deepseek import translate
 
 
@@ -41,7 +42,7 @@ def fake_api(monkeypatch, reply):
             payload = json.loads(request.data)
             context = json.loads(payload["messages"][1]["content"])
             sent.append(payload)
-            data = reply(context, len(sent))
+            data = {"repairs":[]} if "boundaries" in context else reply(context, len(sent))
             return io.BytesIO(json.dumps({"model":"test-local", "usage":{"prompt_tokens":100,"completion_tokens":80},
                 "choices":[{"finish_reason":"stop","message":{"content":json.dumps(data,ensure_ascii=False)}}]}).encode())
     monkeypatch.setattr(urllib.request, "build_opener", lambda *a, **k: Opener())
@@ -63,7 +64,7 @@ def test_ai_merges_fragments_splits_long_asr_segments_and_rebinds_notes(course, 
     validate_project({key: data[key] for key in course})
     again = organize_sentences(course, settings(tmp_path))
     assert again["segments"] == data["segments"] and again["usage"]["calls"] == 0
-    assert len(sent) == 1
+    assert len(sent) == 2
 
 
 def test_window_tail_continues_into_next_window_without_losing_words(course, tmp_path, monkeypatch):
@@ -75,7 +76,7 @@ def test_window_tail_continues_into_next_window_without_losing_words(course, tmp
         return {"ends": [len(context["tokens"])-1]}
     sent = fake_api(monkeypatch, reply)
     data = organize_sentences(course, settings(tmp_path))
-    assert len(sent) == 2
+    assert len(sent) == 3
     assert [word for s in data["segments"] for word in s["source_text"].split()] == words
     assert any("linear algebra." in s["source_text"] for s in data["segments"])
     validate_project({key: data[key] for key in course})
@@ -88,6 +89,41 @@ def test_ai_never_merges_speakers(course, tmp_path, monkeypatch):
     data = organize_sentences(course, settings(tmp_path))
     assert [s["speaker_id"] for s in data["segments"]] == ["teacher","student","teacher"]
     assert len(sent) == 3
+
+
+def test_boundary_review_repairs_false_asr_periods_and_preserves_independent_sentences(course):
+    texts=["Can I put that in different words?", "in linear combination words.",
+           "That's the normal nice case.", "Now we describe a row picture."]
+    units=[dict(course['segments'][0],id=f'seg-{i}',source_text=text,start_ms=i*4000,end_ms=(i+1)*4000)
+           for i,text in enumerate(texts)]
+    class Client:
+        usage={}
+        def json(self,prompt,context,validate):
+            return validate({'repairs':[{'left':0,'fragment':texts[1],
+                'reason':'The attached prepositional phrase depends on the preceding question.'}]})
+    output,mapping=review_sentence_boundaries(units,Client(),{},lambda *a:None)
+    assert len(output)==3
+    assert output[0]['source_text']==' '.join(texts[:2])
+    assert output[1]['source_text']==texts[2] and output[2]['source_text']==texts[3]
+    assert mapping['seg-0']==mapping['seg-1']
+    assert not output[0]['tts_text'] and units[0]['tts_text']=='旧读法'
+
+
+def test_boundary_review_owns_every_seam_and_cannot_join_speakers(course):
+    units=[dict(course['segments'][0],id=f'seg-{i}',source_text=f'Sentence {i}.',start_ms=i*1000,end_ms=(i+1)*1000)
+           for i in range(30)]
+    units[24]['speaker_id']='student'
+    seen=[]
+    class Client:
+        usage={}
+        def json(self,prompt,context,validate):
+            seen.extend(context['boundaries'])
+            with pytest.raises(ValueError):
+                validate({'repairs':[{'left':23,'fragment':'Sentence 23.','reason':'This invented repair crosses a speaker.'}]})
+            return validate({'repairs':[]})
+    output,_=review_sentence_boundaries(units,Client(),{},lambda *a:None)
+    assert set(seen)==set(range(29))-{23,24}
+    assert len(output)==len(units)
 
 
 @pytest.mark.parametrize("text,bad_end", [("The course web page, which has exercises, is available.",4),

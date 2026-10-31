@@ -446,6 +446,9 @@ class Coordinator(QObject):
         return export_issues(self.project, formats)
 
     def run_stage(self, stage, options=None):
+        options = dict(options or {})
+        if stage in {"dub", "preview", "pipeline"}:
+            options.setdefault("alignment_max_speed", 1.5)
         if stage == "translate_missing":
             self._pipeline = []
             self._start("translate", {**(options or {}), "missing_only": True})
@@ -737,4 +740,6 @@ class Coordinator(QObject):
         self._stderr = b""
         if self._pipeline and not self._cancelled:
             next_stage = self._pipeline.pop(0)
-            QTimer.singleShot(0, lambda: self._start(next_stage, {}))
+            timing_options = {key:value for key,value in self._command.get("options",{}).items()
+                              if key in {"alignment_mode", "alignment_max_speed", "alignment_borrow_ms"}}
+            QTimer.singleShot(0, lambda: self._start(next_stage, timing_options))

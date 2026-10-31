@@ -53,7 +53,7 @@ def _locate(issue, indexes):
     location = f"第 {number} 句 · {stamp}" if number else f"{stamp}" if evidence else "项目检查"
     context = (segment.get("source_text", "") if segment else formula.get("raw", "") if formula else "").strip()
     code = issue.get("code", "")
-    action = "formula" if formula else "edit_tts" if code in {"TTS_TOO_LONG", "STALE_AUDIO", "MISSING_TTS"} else "edit_note" if note else "edit_subtitle" if segment else "review"
+    action = "regenerate_tts" if code in {"TTS_SILENT", "TTS_INCOMPLETE"} else "formula" if formula else "edit_tts" if code in {"TTS_TOO_LONG", "STALE_AUDIO", "MISSING_TTS"} else "edit_note" if note else "edit_subtitle" if segment else "review"
     title = f"公式原始表达：{formula.get('raw', '')}" if formula else "配音读法过长" if code == "TTS_TOO_LONG" else issue.get("message", "待检查")
     result.update(segment_id=segment_id, segment_index=number, segment_number=number,
                   start_ms=start, end_ms=end, time_label=stamp, location=location,

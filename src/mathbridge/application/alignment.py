@@ -222,7 +222,7 @@ def _feasible_partition(group,slots,max_speed):
 
 
 def alignment_fingerprint(project, settings, options=None):
-    return fingerprint(dict(version="adaptive-rhythm-2", source=project["source"]["sha256"],
+    return fingerprint(dict(version="adaptive-rhythm-2-content-1", source=project["source"]["sha256"],
                             duration_ms=project["source"]["duration_ms"],
                             segments=[dict(id=s["id"], start_ms=s["start_ms"], end_ms=s["end_ms"],
                                            tts=segment_fingerprint(project, s, settings))
@@ -288,6 +288,7 @@ def cached_alignment_report(project, settings, root, options=None):
     config = alignment_options(options)
     segments = sorted(project["segments"], key=lambda s: s["start_ms"])
     clips, missing = [], []
+    verified_count = signal_checked_count = 0
     for index, segment in enumerate(segments):
         fp = segment_fingerprint(project, segment, settings)
         path = safe_path(Path(root), f"audio/tts/{fp}.wav")
@@ -299,6 +300,11 @@ def cached_alignment_report(project, settings, root, options=None):
                 speech_ms = audio.getnframes() * 1000 / audio.getframerate()
                 if not audio.getnframes():
                     raise ValueError("empty audio")
+            from .speech_quality import VERSION as QUALITY_VERSION
+            quality = marker.get("quality", {})
+            if isinstance(quality,dict) and quality.get("version") == QUALITY_VERSION:
+                signal_checked_count += 1
+                verified_count += quality.get("method") == "local-asr"
         except (OSError, ValueError, EOFError, wave.Error, ZeroDivisionError):
             missing.append(segment["id"])
             continue
@@ -320,13 +326,21 @@ def cached_alignment_report(project, settings, root, options=None):
                           limit_end_ms=segments[index + 1]["start_ms"] if index + 1 < len(segments)
                           else project["source"]["duration_ms"]))
     plans, issues = plan_alignment(clips, project["source"]["duration_ms"], config)
+    try:
+        stored = json.loads((Path(root)/"audio/content-issues.json").read_text(encoding="utf8"))["issues"]
+        current = {s["id"]:segment_fingerprint(project,s,settings) for s in segments}
+        issues.extend(item for item in stored if isinstance(item,dict) and item.get("segment_id") in current
+                      and item.get("input_fingerprint") == current[item["segment_id"]])
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
     merges=suggest_merges(project,{clip["segment_id"]:clip["speech_ms"] for clip in clips},config)
-    problem_ids={issue['segment_id'] for issue in issues}
+    problem_ids={issue['segment_id'] for issue in issues if issue.get('code')=='TTS_TOO_LONG'}
     merges['suggested_merges']=[group for group in merges['suggested_merges'] if problem_ids.intersection(group)]
     if not issues:merges['predicted_remaining_count']=0
     return dict(input_fingerprint=alignment_fingerprint(project, settings, config),
                 project_revision=project["revision"], options=config, issues=issues,
                 measured_count=len(plans), missing_count=len(missing), missing_segment_ids=missing,
+                content_verified_count=verified_count, signal_checked_count=signal_checked_count,
                 borrowed_count=sum(plan["speech_ms"] > plan["end_ms"] - plan["start_ms"]
                                    and plan["speed"] <= config["alignment_max_speed"] for plan in plans),
                 estimated=True, plans=plans,

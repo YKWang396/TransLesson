@@ -21,6 +21,51 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
     stage = command["stage"]
     source = Path(command.get("source_path", ""))
     outputs, metadata, artifacts = [], {}, []
+    from mathbridge.application.speech_quality import SpeechVerifier, VERSION as QUALITY_VERSION
+    from mathbridge.media.engine import MediaError
+    verifier = SpeechVerifier(settings, cancel)
+    content_path = safe_path(root, "audio/content-issues.json")
+    try:
+        content_issues = json.loads(content_path.read_text(encoding="utf8"))["issues"]
+        if not isinstance(content_issues, list):
+            content_issues = []
+        content_issues = [item for item in content_issues if isinstance(item, dict)]
+    except (OSError, ValueError, KeyError, TypeError):
+        content_issues = []
+
+    def save_content_issue(segment, error=None):
+        nonlocal content_issues
+        content_issues = [item for item in content_issues if item.get("segment_id") != segment["id"]]
+        if error:
+            position = next(i + 1 for i, s in enumerate(project["segments"]) if s["id"] == segment["id"])
+            from mathbridge.application.alignment import time_label
+            content_issues.append(dict(code=error.code, severity="error", segment_id=segment["id"],
+                entity_id=segment["id"], input_fingerprint=segment_fingerprint(project, segment, settings),
+                message=f"第 {position} 句（{time_label(segment['start_ms'])}）：{str(error).rstrip('。')}。"
+                        "已自动重试；点击“自动生成并匹配配音”可继续重试，已通过的句子会复用。"))
+        atomic_json(content_path, dict(version=QUALITY_VERSION, issues=content_issues))
+
+    def verify_cached(path, segment, marker):
+        try:
+            info = json.loads(marker.read_text(encoding="utf8"))
+        except (OSError, ValueError):
+            info = dict(sha256=file_hash(path, cancel), input_fingerprint=segment_fingerprint(project, segment, settings),
+                        input_revision=project["revision"])
+        quality = info.get("quality", {})
+        if not isinstance(quality, dict):
+            quality = {}
+        if (quality.get("version") == "speech-content-1" and quality.get("method") == "local-asr"
+                and isinstance(quality.get("heard"), str)):
+            from mathbridge.application.speech_quality import compare_speech
+            comparison = compare_speech(segment["tts_text"], quality["heard"], project["languages"]["target"])
+            if not comparison["suspected_omission"]:
+                quality = dict(quality, **comparison, version=QUALITY_VERSION)
+                atomic_json(marker, dict(info, quality=quality))
+        if (quality.get("version") != QUALITY_VERSION or
+                verifier.can_recognize and quality.get("method") != "local-asr"):
+            quality = verifier.verify(path, segment["tts_text"], project["languages"]["target"])
+            atomic_json(marker, dict(info, quality=quality))
+        return quality
 
     def progress(name, completed=0, total=0, message=""):
         if cancel.is_set():
@@ -202,6 +247,7 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         if options.get("sample_only") and len(segments) != 1:
             raise ValueError("VOICE_SAMPLE_INVALID: 请一次选择一个片段试听")
         references = {}
+        failed_content = []
         for index, segment in enumerate(segments):
             progress("dub", index, len(segments), f"合成 {segment['id']}")
             if not segment["tts_text"].strip():
@@ -219,31 +265,72 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                     cache_valid = isinstance(cached, dict) and cached.get("sha256") == file_hash(dest, cancel) and cached.get("input_fingerprint") == fp
                 except (OSError, ValueError):
                     pass
+            if cache_valid and voice["provider"] == "gpt_sovits":
+                progress("dub", index, len(segments), f"回听检查第 {index + 1} 句")
+                try:
+                    verify_cached(dest, segment, marker)
+                except MediaError as error:
+                    if error.code not in {"TTS_SILENT", "TTS_INCOMPLETE"}:
+                        raise
+                    cache_valid = False
             if not cache_valid:
                 if options.get("timing_sample"):
                     raise ValueError("STALE_AUDIO: 请先生成这句自然配音，再试听调整结果")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 if voice["provider"] == "gpt_sovits":
-                    from mathbridge.application.voices import prepare_reference, prepare_auxiliary_references
+                    from mathbridge.application.voices import prepare_reference, prepare_auxiliary_references, cached_target_reference
                     from mathbridge.providers.tts.gpt_sovits import synthesize
                     if speaker["id"] not in references:
                         reference_args=dict(source_media=source,media_engine=engine())
                         references[speaker["id"]] = (prepare_reference(project,speaker,root,source_audio(),cancel,**reference_args),
                             prepare_auxiliary_references(project,speaker,root,source_audio(),cancel,**reference_args))
                     reference, auxiliary = references[speaker["id"]]
-                    synthesize(segment["tts_text"], project["languages"]["target"], reference,
-                               voice["reference_text"], voice["reference_language"], dest, endpoint=voice["endpoint"],
-                               speed=voice["speed"], cancel=cancel,auxiliary_reference_audio=auxiliary)
+                    quality = {}
+                    attempt_path = safe_path(root, f"cache/tts-attempts/{fp}.json")
+                    try:
+                        seed = int(json.loads(attempt_path.read_text(encoding="utf8"))["next_seed"]) % 2**32
+                    except (OSError, ValueError, TypeError, KeyError):
+                        seed = 1
+                    atomic_json(attempt_path, dict(next_seed=(seed + 5) % 2**32))
+                    def verify_generated(path):
+                        quality.update(verifier.verify(path, segment["tts_text"], project["languages"]["target"]))
+                    try:
+                        synthesize(segment["tts_text"], project["languages"]["target"], reference,
+                                   voice["reference_text"], voice["reference_language"], dest, endpoint=voice["endpoint"],
+                                   speed=voice["speed"], cancel=cancel, auxiliary_reference_audio=auxiliary,
+                                   verify=verify_generated, seed=seed,
+                                   fallback_reference=lambda:cached_target_reference(project,speaker["id"],segment["id"],root,settings,cancel),
+                                   retry_notice=lambda attempt, code:
+                                       progress("dub", index, len(segments), f"第 {index + 1} 句检测到漏读或静音，自动重试 {attempt}/5"))
+                    except MediaError as error:
+                        if error.code not in {"TTS_SILENT", "TTS_INCOMPLETE"}:
+                            raise
+                        save_content_issue(segment, error)
+                        failed_content.append(content_issues[-1])
+                        continue
                 else:
                     from mathbridge.providers.tts.windows import synthesize
                     synthesize(segment["tts_text"], project["languages"]["target"], voice["voice"], dest,
                                cancel=cancel, rate=voice["rate"])
-                atomic_json(marker, dict(sha256=file_hash(dest, cancel), input_fingerprint=fp, input_revision=project["revision"]))
+                atomic_json(marker, dict(sha256=file_hash(dest, cancel), input_fingerprint=fp,
+                    input_revision=project["revision"], **({"quality":quality} if voice["provider"] == "gpt_sovits" else {})))
+            save_content_issue(segment)
             cached_metadata = json.loads(marker.read_text(encoding="utf-8"))
             artifact = dict(id="tts-" + fp[:24], kind="tts", path=relative, sha256=file_hash(dest, cancel),
                             input_fingerprint=fp, input_revision=cached_metadata.get("input_revision", project["revision"]), segment_ids=[segment["id"]], depends_on=[])
             artifacts.append(artifact)
             outputs.append(str(dest))
+        if failed_content:
+            if (stage == "dub" and not options.get("sample_only") and not requested
+                    and not options.get("_content_repair_pass")):
+                progress("dub",len(segments)-len(failed_content),len(segments),
+                         "复用已通过的配音，为剩余异常句补充目标语言语音上下文后重试")
+                verifier.model = None
+                repaired = execute(dict(command,options=dict(options,_content_repair_pass=True)),cancel,report)
+                repaired.setdefault("metadata",{})["content_repair_passes"] = 1
+                return repaired
+            raise MediaError("TTS_CONTENT_ISSUES", f"{len(failed_content)} 句配音经自动重试仍有静音或疑似漏读，"
+                             "具体句子和时间已列入配音页。已通过的音频已保留，可直接重试。", issues=failed_content)
         if options.get("sample_only"):
             if options.get("timing_sample"):
                 from mathbridge.application.dubbing import prepare_timing
@@ -367,6 +454,15 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
                 path = safe_path(root, cached["path"])
                 if not path.exists() or file_hash(path, cancel) != cached["sha256"]:
                     raise ValueError(f"ARTIFACT_CHANGED: {segment['id']} 配音文件已改变")
+                if speaker_voice(next(s for s in project["speakers"] if s["id"] == segment["speaker_id"]), settings)["provider"] == "gpt_sovits":
+                    progress("export", len(clips), len(project["segments"]), "检查配音内容完整性")
+                    try:
+                        verify_cached(path, segment, path.with_suffix(".json"))
+                    except MediaError as error:
+                        if error.code not in {"TTS_SILENT", "TTS_INCOMPLETE"}:
+                            raise
+                        save_content_issue(segment, error)
+                        raise MediaError(error.code, content_issues[-1]["message"], issues=[content_issues[-1]]) from error
                 artifacts.append(cached)
                 clips.append(dict(path=str(path), start_ms=segment["start_ms"], end_ms=segment["end_ms"],
                                   segment_id=segment["id"],speaker_id=segment["speaker_id"], index=len(clips) + 1))

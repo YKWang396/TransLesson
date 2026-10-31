@@ -10,11 +10,20 @@ import pytest
 from mathbridge.application.alignment import plan_alignment
 from mathbridge.application.artifacts import validate_render_plan
 from mathbridge.application.subtitles import build_cues,dubbing_timing
+from mathbridge.application.subtitles import _caption_chunks
 from mathbridge.media.rhythm import analyze_wave,compact_pauses
 
 
 def clip(identifier,start,end,speech,speaker="teacher"):
     return dict(segment_id=identifier,start_ms=start,end_ms=end,speech_ms=speech,speaker_id=speaker)
+
+
+def test_long_caption_uses_clause_boundary_instead_of_cutting_a_phrase():
+    text="如果我做得还算不错，我想它恰好会经过，不是恰好，是它被安排成经过那个点。然后我们继续检查下一个点。"
+    chunks=_caption_chunks(text,20)
+    assert len(chunks)>1 and chunks[0].replace('\n','').endswith(('，','。'))
+    assert ''.join(chunks).replace('\n','')==text
+    assert all(len(c.replace('\n',''))<=40 for c in chunks)
 
 
 def test_shares_time_without_merging_text_or_crossing_speakers():

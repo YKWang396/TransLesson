@@ -91,7 +91,7 @@ def main():
         '# 课译TransLesson '+application_version+'\n\n双击课译TransLesson.exe 启动，请保留整个文件夹。\n\n'
         '本地组件放在 components/GPT-SoVITS 和 components/faster-whisper-small，应用会自动识别；也可在处理设置中指定组件目录。'
         '在 03 配音点击“启动声音服务”，等待显示已就绪后使用原声音色。\n\n'
-        '[使用说明](docs/08-user-guide.md) · [组件与服务](docs/18-components-and-branding.md) · [项目迁移](docs/12-another-computer.md)\n\n'
+        '[使用说明](docs/08-user-guide.md) · [漏读检查](docs/19-speech-content-check.md) · [组件与服务](docs/18-components-and-branding.md) · [项目迁移](docs/12-another-computer.md)\n\n'
         '项目与课程视频单独保存；文本 API 使用所配置的 Key。常规程序下载包不包含大型模型和 GPT-SoVITS 运行环境，迁移完整本机软件时请一并复制 components。\n',encoding='utf-8')
     print(f'Recorded {len(records)} installed runtime packages and available license files')
 

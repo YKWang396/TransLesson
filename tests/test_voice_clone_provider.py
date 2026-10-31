@@ -161,6 +161,51 @@ def test_invalid_response_preserves_previous_output(reference, tmp_path):
     assert not list(tmp_path.glob(".*.tmp.wav"))
 
 
+def test_silent_response_retries_and_preserves_previous_audio(reference, tmp_path):
+    output = tmp_path / "dub.wav"
+    output.write_bytes(b"previous successful audio")
+    silent = io.BytesIO()
+    with wave.open(silent, "wb") as audio:
+        audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        audio.writeframes(b"\x05\x00" * 12000)
+    with local_api(body=silent.getvalue()) as (endpoint, requests, _):
+        with pytest.raises(MediaError, match="TTS_SILENT"):
+            call(reference, output, endpoint)
+    assert [r[1]["seed"] for r in requests] == [1, 2, 3, 4, 5]
+    assert all(r[1]["text_split_method"] == "cut0" for r in requests)
+    assert requests[-1][1]["parallel_infer"] is False
+    assert requests[-1][1]["use_cuda_graph"] is False
+    assert output.read_bytes() == b"previous successful audio"
+    assert not list(tmp_path.glob(".*.tmp.wav"))
+
+
+def test_omission_callback_retries_then_commits_verified_output(reference, tmp_path):
+    attempts = []
+    def verify(path):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise MediaError("TTS_INCOMPLETE", "missing clause")
+    with local_api() as (endpoint, requests, _):
+        call(reference, tmp_path/"out.wav", endpoint, verify=verify)
+    assert len(requests) == len(attempts) == 2
+    assert (tmp_path/"out.wav").is_file()
+
+
+def test_repeated_failure_can_use_checked_target_language_context(reference, tmp_path):
+    target=tmp_path/'checked-voice.wav';target.write_bytes(wav_bytes(4))
+    attempts=[]
+    def verify(path):
+        attempts.append(path)
+        if len(attempts)<4:raise MediaError('TTS_INCOMPLETE','missing clause')
+    with local_api() as (endpoint,requests,_):
+        call(reference,tmp_path/'out.wav',endpoint,verify=verify,
+             fallback_reference=lambda:(target,'这是一段已经检查过的同一说话人配音。','zh-CN'))
+    assert len(requests)==4
+    assert requests[-1][1]['ref_audio_path']==str(target.resolve())
+    assert requests[-1][1]['prompt_lang']=='zh'
+    assert requests[-1][1]['aux_ref_audio_paths']==[str(reference.resolve())]
+
+
 @pytest.mark.parametrize("body,content_type,status,code", [
     (b'{"message":"missing model"}', "application/json", 400, "HTTP 400"),
     (b'{"message":"not audio"}', "application/json", 200, "TTS_FAILED"),

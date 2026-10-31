@@ -75,3 +75,39 @@ def prepare_auxiliary_references(project,speaker,root,source_audio,cancel=None,*
         profile = dict(reference_start_ms=reference["start_ms"],reference_end_ms=reference["end_ms"])
         result.append(prepare_reference(project,dict(speaker,voice_profile=profile),root,source_audio,cancel,**kwargs))
     return result
+
+
+def cached_target_reference(project, speaker_id, exclude_id, root, settings, cancel=None):
+    """Find a checked target-language utterance of this exact synthesized voice.
+
+    A short cross-language utterance may repeatedly decode to mute. A complete,
+    already verified utterance supplies target-language pronunciation context;
+    it does not train a model or borrow any other speaker's voice.
+    """
+    from mathbridge.domain.project import segment_fingerprint
+    from .speech_quality import VERSION
+    candidates = []
+    for segment in project["segments"]:
+        if segment["speaker_id"] != speaker_id or segment["id"] == exclude_id:
+            continue
+        text = segment["tts_text"].strip()
+        if len(text) < 10 or len(text) > 100:
+            continue
+        if project["languages"]["target"].startswith("zh") and any(c.isascii() and c.isalnum() for c in text):
+            continue
+        fp = segment_fingerprint(project, segment, settings)
+        path = safe_path(Path(root), f"audio/tts/{fp}.wav")
+        try:
+            marker = json.loads(path.with_suffix(".json").read_text(encoding="utf8"))
+            quality = marker.get("quality", {})
+            if (marker.get("input_fingerprint") != fp or quality.get("version") != VERSION
+                    or quality.get("method") != "local-asr" or quality.get("suspected_omission")
+                    or quality.get("coverage", 0) < .9 or not 3000 <= quality.get("duration_ms", 0) <= 10000):
+                continue
+            candidates.append((quality["coverage"], path, text, marker["sha256"]))
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    for _, path, text, digest in sorted(candidates, key=lambda c:c[0], reverse=True):
+        if path.is_file() and file_hash(path, cancel) == digest:
+            return path, text, project["languages"]["target"]
+    return None
