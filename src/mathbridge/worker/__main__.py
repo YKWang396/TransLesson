@@ -110,6 +110,16 @@ def execute(command: dict, cancel: threading.Event, report) -> dict:
         validate_project(project)
         return dict(project=project, outputs=[], metadata=metadata)
 
+    if stage == "test_api":
+        from mathbridge.providers.translation.client import TextClient
+        client = TextClient(settings,cancel,prompt_version="api-contract-1")
+        def validate(data):
+            if data != {"ok":True}:
+                raise ValueError('return exactly {"ok":true}')
+            return data
+        client.json('This is an API connection test. Return only the JSON object {"ok":true}.',{},validate)
+        return dict(outputs=[],artifacts=[],metadata=dict(provider=client.provider_id,model=client.model,usage=client.usage))
+
     if not project:
         raise ValueError("请先打开项目")
     validate_project(project)

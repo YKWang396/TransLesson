@@ -13,6 +13,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from .providers import PROVIDERS, cache_identity, canonical_base, make_payload, provider_id, provider_label
+
 
 class TranslationError(RuntimeError):
     def __init__(self, code: str, message: str, usage: dict | None = None):
@@ -28,10 +30,17 @@ def _cancelled(cancel, usage=None):
 
 class TextClient:
     def __init__(self, settings, cancel=None, *, prompt_version="course-ai-1"):
-        local = settings.get("provider") == "llama_cpp" or settings.get("text_provider") == "offline"
-        base = settings.get("api_base", "http://127.0.0.1:8080/v1" if local else "https://api.deepseek.com").rstrip("/")
-        parsed = urllib.parse.urlsplit(base)
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        identifier = provider_id(settings)
+        if identifier not in PROVIDERS:
+            raise TranslationError("INVALID_SETTINGS", "请选择支持的文本服务商")
+        local = identifier == "offline"
+        base = canonical_base(settings.get("api_base", PROVIDERS[identifier].base))
+        try:
+            parsed = urllib.parse.urlsplit(base)
+            valid = bool(parsed.hostname) and parsed.port != 0
+        except ValueError:
+            valid = False
+        if not valid or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise TranslationError("INVALID_SETTINGS", "API 地址不得含凭据或查询参数")
         if local:
             if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
@@ -53,7 +62,7 @@ class TextClient:
                 or (not local and (budget <= 0 or input_price <= 0 or output_price <= 0))):
             raise TranslationError("INVALID_SETTINGS", "设置预算、调用上限和当前输入/输出单价后再开始")
         max_tokens = min(max(int(settings.get("max_output_tokens", 4096)), 128), 16384)
-        usage = {"provider": "llama_cpp" if local else "deepseek", "requested_model": model,
+        usage = {"provider": "llama_cpp" if local else identifier, "requested_model": model,
                  "returned_models": [], "prompt_version": prompt_version,
                  "processed_at": dt.datetime.now(dt.timezone.utc).isoformat(), "calls": 0,
                  "prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
@@ -92,7 +101,14 @@ class TextClient:
         prior_calls = int(settings.get("usage_calls", 0))
         if not math.isfinite(prior_cost) or prior_cost < 0 or prior_calls < 0:
             raise TranslationError("INVALID_SETTINGS", "无效累计 usage")
-        endpoint = base if base.endswith("/chat/completions") else base + "/chat/completions"
+        endpoint = base + "/chat/completions"
+        self.last_message = None
+
+        def redacted(value):
+            value = str(value)
+            if settings.get("api_key"):
+                value = value.replace(settings["api_key"], "[已隐藏 Key]")
+            return re.sub(r"[\x00-\x1f]", " ", value)[:360]
 
         def request(payload):
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -129,7 +145,9 @@ class TextClient:
                         raise TranslationError("INVALID_TRANSLATION", "API 未返回可记账的实际 usage，已保守预留费用", usage)
                     usage["prompt_tokens"] += counters["prompt_tokens"]
                     usage["completion_tokens"] += counters["completion_tokens"]
-                    usage["cache_hit_tokens"] += max(0, counters.get("prompt_cache_hit_tokens", 0))
+                    detail = counters.get("prompt_tokens_details") or {}
+                    hits = counters.get("prompt_cache_hit_tokens", detail.get("cached_tokens", 0) if isinstance(detail,dict) else 0)
+                    usage["cache_hit_tokens"] += hits if type(hits) is int and hits >= 0 else 0
                     # Charge all input at supplied uncached price, avoiding optimistic cache pricing.
                     usage["cost_cny"] += (counters["prompt_tokens"] * input_price + counters["completion_tokens"] * output_price) / 1_000_000
                     accounted = True
@@ -141,11 +159,17 @@ class TextClient:
                         raise TranslationError("OUTPUT_TOO_LONG", "AI 输出超过长度限制，已保留完成的章节；可再次点击继续整理", usage)
                     if not choices or choices[0].get("finish_reason") not in ("stop", None):
                         raise TranslationError("INVALID_TRANSLATION", "AI 输出未完整结束，已保留完成的批次，可重试", usage)
-                    return choices[0]["message"]["content"]
+                    self.last_message = choices[0]["message"]
+                    content = self.last_message.get("content")
+                    if self.last_message.get("refusal"):
+                        raise TranslationError("MODEL_REFUSED", "所选模型拒绝了本次文本请求，已保留完成的批次", usage)
+                    if not isinstance(content,str) or not content.strip():
+                        raise TranslationError("INVALID_TRANSLATION", "模型未返回正文 JSON；请检查模型能力及输出 token 上限", usage)
+                    return content
                 except urllib.error.HTTPError as exc:
                     if exc.code in (401, 403):
                         persist_ledger()
-                        raise TranslationError("API_AUTH_FAILED", "API 身份或权限验证失败", usage) from None
+                        raise TranslationError("API_AUTH_FAILED", provider_label(identifier) + " 身份或权限验证失败，请检查 Key、开通权限及地域", usage) from None
                     if exc.code == 429 or 500 <= exc.code <= 599:
                         # Failed upstream requests may have incurred billing.
                         usage["uncertain_requests"] += 1
@@ -155,14 +179,23 @@ class TextClient:
                             time.sleep(min(0.5 * (2 ** attempt), 2))
                             continue
                     persist_ledger()
-                    raise TranslationError("PROVIDER_HTTP_ERROR", f"API HTTP {exc.code}；检查 endpoint 和模型能力", usage) from None
+                    detail = ""
+                    try:
+                        error = json.loads(exc.read(8192))
+                        error = error.get("error", error)
+                        if isinstance(error,dict):
+                            detail = redacted(error.get("message") or error.get("code") or "")
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        pass
+                    raise TranslationError("PROVIDER_HTTP_ERROR", f"{provider_label(identifier)} HTTP {exc.code}；"
+                                           "检查 API 地址、模型 ID 及参数兼容性。" + detail, usage) from None
                 except (TimeoutError, urllib.error.URLError, OSError) as exc:
                     usage["uncertain_requests"] += 1
                     usage["uncertain_cost_cny"] += reserve
                     persist_ledger()
                     # A timed-out POST may already be charged; no silent repeat.
                     reason = getattr(exc, "reason", exc)
-                    detail = type(reason).__name__ + ": " + str(reason)[:240]
+                    detail = type(reason).__name__ + ": " + redacted(reason)
                     raise TranslationError("PROVIDER_TIMEOUT", "API 连接未完成（" + detail + "），可能已计费；完成的批次已保留", usage) from None
                 except (KeyError, ValueError, TypeError):
                     if not accounted:
@@ -174,17 +207,27 @@ class TextClient:
         self.request = request
         self.usage = usage
         self.model, self.local, self.max_tokens = model, local, max_tokens
+        self.settings = dict(settings)
+        self.provider_id = identifier
+        self.cache_identity = cache_identity(dict(settings, api_base=base))
         self.cancel = cancel
+
+    def payload(self, messages):
+        return make_payload(self.settings, messages, self.max_tokens)
+
+    def assistant_message(self, content):
+        message = {"role":"assistant", "content":content}
+        if self.provider_id == "kimi" and self.last_message and self.last_message.get("content") == content:
+            if self.last_message.get("reasoning_content") is not None:
+                message["reasoning_content"] = self.last_message["reasoning_content"]
+        return message
 
     def json(self, system, context, validate):
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
         for repair in range(2):
             _cancelled(self.cancel, self.usage)
-            payload = {"model": self.model, "messages": messages, "response_format": {"type": "json_object"},
-                       "temperature": 0.1, "max_tokens": self.max_tokens, "stream": False}
-            if not self.local:
-                payload["thinking"] = {"type": "disabled"}
+            payload = self.payload(messages)
             try:
                 content = self.request(payload)
             except TranslationError as exc:
@@ -199,6 +242,6 @@ class TextClient:
             except (ValueError, TypeError, KeyError) as exc:
                 if repair:
                     raise TranslationError("INVALID_TRANSLATION", "一次结构修复后仍失败：" + str(exc), self.usage) from None
-                messages.extend([{"role": "assistant", "content": content[:100000]},
+                messages.extend([self.assistant_message(content),
                                  {"role": "user", "content": "Repair JSON once: " + str(exc)}])
         raise AssertionError("unreachable")

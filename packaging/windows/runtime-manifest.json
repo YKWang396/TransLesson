@@ -1,6 +1,6 @@
 {
   "application_name": "课译TransLesson",
-  "application_version": "0.2.0",
+  "application_version": "0.2.1",
   "platform": "Windows-11-10.0.26200-SP0",
   "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
   "packages": [
@@ -302,16 +302,15 @@
     },
     {
       "name": "pillow",
-      "version": "13.0.0",
+      "version": "12.3.0",
       "license": "MIT-CMU",
       "project_urls": [
         "Release notes, https://pillow.readthedocs.io/en/stable/releasenotes/index.html",
         "Changelog, https://github.com/python-pillow/Pillow/releases",
         "Documentation, https://pillow.readthedocs.io",
-        "Funding, https://tidelift.com/lifter/search/pypi/pillow",
-        "Homepage, https://python-pillow.org",
+        "Funding, https://tidelift.com/subscription/pkg/pypi-pillow?utm_source=pypi-pillow&utm_medium=pypi",
+        "Homepage, https://python-pillow.github.io",
         "Mastodon, https://fosstodon.org/@pillow",
-        "Security, https://pillow.readthedocs.io/en/stable/handbook/security.html",
         "Source, https://github.com/python-pillow/Pillow"
       ],
       "license_files": [
@@ -502,7 +501,7 @@
   ],
   "node": {
     "version": "v24.22.1",
-    "sha256": "e12473d1871d42b4c10515fc1c1f18a7fd71af07b13d5b3a000b6f0b382e937c",
+    "sha256": "b59feb2088f80e1fa431c8f9c316861e660e5936f968fd97b802e550fed356c5",
     "license_status": "Upstream Node.js and bundled third-party license collection required before public redistribution"
   },
   "mathjax": {

@@ -53,3 +53,8 @@ def delete_secret(namespace: str) -> None:
     api = _api()
     if not api.CredDeleteW("MathBridge/" + namespace, 1, 0) and ctypes.get_last_error() != 1168:
         raise ctypes.WinError(ctypes.get_last_error())
+
+
+def load_text_secret(settings):
+    from mathbridge.providers.translation.providers import credential_namespace
+    return load_secret(credential_namespace(settings))

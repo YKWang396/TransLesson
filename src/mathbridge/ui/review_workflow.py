@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from mathbridge.application.issues import obsolete_rule_formula_ids
+from mathbridge.providers.translation.providers import REMOTE_PROVIDERS
 
 
 def review_guidance(project, settings, *, busy=False, dirty=False):
@@ -43,7 +44,7 @@ def review_guidance(project, settings, *, busy=False, dirty=False):
                 except ValueError:
                     ready = False
             else:
-                ready = provider == "deepseek" and bool(settings.get("api_key")) and bool(settings.get("allow_text_api")) and bool(settings.get("model"))
+                ready = provider in REMOTE_PROVIDERS and bool(settings.get("api_key")) and bool(settings.get("allow_text_api")) and bool(settings.get("model"))
             if ready:
                 partial = missing_count < len(segments)
                 organized = all(s["id"].startswith("sentence-") for s in segments)

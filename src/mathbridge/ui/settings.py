@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget,
 )
 from mathbridge.application.components import component_paths,default_components_directory,resolve_component_settings,whisper_available,gpt_sovits_available
+from mathbridge.providers.translation.providers import PROVIDERS, PROFILE_FIELDS, REMOTE_PROVIDERS, credential_namespace, preset
 
 _MODEL_ROOT = (Path(sys.executable).resolve().parents[2] if getattr(sys, "frozen", False)
                else Path(__file__).resolve().parents[3]) / "models" / "speakers"
@@ -41,6 +43,7 @@ DEFAULTS = {
     "input_price_per_million": 2.0, "output_price_per_million": 8.0,
     "remember_api_key": False,
     "components_root": "", "gpt_sovits_path": "",
+    "text_json_mode": True, "text_api_profiles": "{}",
 }
 
 
@@ -80,6 +83,16 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(680, 610)
         self.values = dict(values)
         self.fields = {}
+        try:
+            profiles=json.loads(values.get('text_api_profiles','{}'))
+            self._api_profiles={p:{k:v for k,v in profile.items() if k in PROFILE_FIELDS}
+                                for p,profile in profiles.items() if p in PROVIDERS and isinstance(profile,dict)}
+        except (ValueError,TypeError,AttributeError):self._api_profiles={}
+        self._api_provider=values.get('text_provider','deepseek')
+        self._key_scope=credential_namespace(values)
+        self._session_keys={self._key_scope:str(values['api_key'])} if values.get('api_key') else {}
+        self._credential_changes={}
+        self._switching_api=False
         if service_manager is None:
             from .voice_service import LocalVoiceService
             service_manager=LocalVoiceService(self)
@@ -129,11 +142,13 @@ class SettingsDialog(QDialog):
         api = QWidget()
         form = QFormLayout(api)
         self._combo(form, "text_provider", "文本处理方式", [
-            ("手动校对（不发送内容）", "manual"), ("DeepSeek API", "deepseek"),
-            ("本地 llama.cpp", "offline"),
+            ("手动校对（不发送内容）", "manual"),
+            *((spec.label,identifier) for identifier,spec in PROVIDERS.items()),
         ])
         self._line(form, "api_base", "API 地址")
-        self._line(form, "model", "模型标识")
+        model=QComboBox();model.setEditable(True)
+        self.fields['model']=model;form.addRow('模型 / 接入点 ID',model)
+        self._set_models(self._api_provider,values.get('model',''))
         key = self._line(form, "api_key", "API Key")
         key.setEchoMode(QLineEdit.EchoMode.Password)
         key.setPlaceholderText("不会写入项目或普通配置")
@@ -148,7 +163,7 @@ class SettingsDialog(QDialog):
         form.addRow(allow)
         self._number(form, "budget_cny", "本项目最多花费（元）", 0.01, 100000, 2)
         form.addRow(QLabel("断句、翻译和讲义共用这一预算，达到上限自动停止。"))
-        advanced_toggle = QCheckBox("高级：费用估算单价")
+        advanced_toggle = QCheckBox("高级：费率与 JSON 模式")
         advanced = QWidget()
         advanced_form = QFormLayout(advanced)
         advanced_form.setContentsMargins(0, 0, 0, 0)
@@ -162,6 +177,29 @@ class SettingsDialog(QDialog):
         explanation.setWordWrap(True)
         explanation.setObjectName("notice")
         form.addRow(explanation)
+        json_mode=QCheckBox('接口支持 JSON 模式')
+        json_mode.setChecked(bool(values.get('text_json_mode',True)))
+        self.fields['text_json_mode']=json_mode
+        advanced_form.addRow(json_mode)
+        self.api_hint=QLabel();self.api_hint.setWordWrap(True);self.api_hint.setObjectName('description')
+        form.addRow(self.api_hint)
+        test_row=QWidget();test_layout=QHBoxLayout(test_row);test_layout.setContentsMargins(0,0,0,0)
+        self.test_api_button=QPushButton('测试连接与 JSON')
+        self.test_api_button.setToolTip('仅发送固定测试文字，不发送课程；可能产生少量 token 费用。')
+        self.api_docs_button=QPushButton('接口说明')
+        test_layout.addWidget(self.test_api_button);test_layout.addWidget(self.api_docs_button);test_layout.addStretch()
+        form.addRow(test_row)
+        self.api_test_status=QLabel();self.api_test_status.setWordWrap(True);form.addRow(self.api_test_status)
+        from .api_probe import ApiProbe
+        self.api_probe=ApiProbe(self)
+        self.api_probe.finished.connect(self._api_test_finished)
+        self.finished.connect(lambda *_:self.api_probe.cancel())
+        self.test_api_button.clicked.connect(self._test_api)
+        self.api_docs_button.clicked.connect(self._api_docs)
+        self.fields['text_provider'].currentIndexChanged.connect(self._switch_provider)
+        self.fields['api_base'].textChanged.connect(self._endpoint_changed)
+        self._restore_key()
+        self._show_api_hint()
         tabs.addTab(self._scroll(api), "文本与隐私")
 
         audio = QWidget()
@@ -207,6 +245,104 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _set_models(self,provider,value):
+        field=self.fields['model'];blocked=field.blockSignals(True)
+        field.clear()
+        if provider in PROVIDERS:field.addItems(PROVIDERS[provider].models)
+        field.setCurrentText(str(value));field.blockSignals(blocked)
+
+    def _api_values(self):
+        result={}
+        for key in PROFILE_FIELDS:
+            field=self.fields[key]
+            result[key]=(field.isChecked() if isinstance(field,QCheckBox) else field.currentText().strip()
+                         if isinstance(field,QComboBox) else field.value() if isinstance(field,(QDoubleSpinBox,QSpinBox))
+                         else field.text().strip())
+        return result
+
+    def _capture_key(self):
+        if self._api_provider not in REMOTE_PROVIDERS:return
+        key=self.fields['api_key'].text().strip()
+        self._session_keys[self._key_scope]=key
+        self._credential_changes[self._key_scope]=dict(secret=key,remember=self.fields['remember_api_key'].isChecked())
+
+    def _restore_key(self):
+        scope=credential_namespace(dict(self._api_values(),text_provider=self._api_provider))
+        self._key_scope=scope
+        key=self._session_keys.get(scope)
+        if key is None:
+            key=''
+            if self.fields['remember_api_key'].isChecked() and self._api_provider in REMOTE_PROVIDERS:
+                try:
+                    from mathbridge.storage.credentials import load_secret
+                    key=load_secret(scope)
+                except OSError:self.api_test_status.setText('无法读取此接口的已保存 Key，可在当前会话重新填写。')
+        self.fields['api_key'].setText(key)
+
+    def _switch_provider(self,*_):
+        if self._switching_api:return
+        self.api_probe.cancel()
+        self._capture_key()
+        if self._api_provider in PROVIDERS:self._api_profiles[self._api_provider]=self._api_values()
+        self._api_provider=self.fields['text_provider'].currentData()
+        if self._api_provider not in PROVIDERS:
+            self._show_api_hint();return
+        values=self._api_profiles.get(self._api_provider,preset(self._api_provider))
+        self._switching_api=True
+        try:
+            self._set_models(self._api_provider,values.get('model',''))
+            for key in PROFILE_FIELDS:
+                if key=='model':continue
+                field=self.fields[key];value=values.get(key,preset(self._api_provider)[key])
+                if isinstance(field,QCheckBox):field.setChecked(bool(value))
+                elif isinstance(field,(QDoubleSpinBox,QSpinBox)):field.setValue(float(value))
+                else:field.setText(str(value))
+            self._restore_key()
+        finally:self._switching_api=False
+        self.api_test_status.clear();self._show_api_hint()
+
+    def _endpoint_changed(self,*_):
+        if self._switching_api:return
+        self.api_probe.cancel()
+        self._capture_key()
+        self._restore_key()
+        self.api_test_status.clear()
+
+    def _show_api_hint(self):
+        spec=PROVIDERS.get(self._api_provider)
+        self.api_hint.setText((spec.hint+' 更换模型后请核对高级设置中的费率。') if spec else '手动校对不调用文本 API。')
+        enabled=spec is not None
+        for key in PROFILE_FIELDS:self.fields[key].setEnabled(enabled)
+        online=self._api_provider in REMOTE_PROVIDERS
+        self.fields['api_key'].setEnabled(online)
+        self.fields['remember_api_key'].setEnabled(online)
+        self.fields['allow_text_api'].setEnabled(online)
+        self.test_api_button.setEnabled(enabled and self.api_probe.process is None)
+        self.api_docs_button.setEnabled(bool(spec and spec.docs))
+
+    def persist_credentials(self):
+        self._capture_key()
+        from mathbridge.storage.credentials import save_secret,delete_secret
+        for scope,value in self._credential_changes.items():
+            if value['remember'] and value['secret']:save_secret(scope,value['secret'])
+            else:delete_secret(scope)
+
+    def _api_docs(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        spec=PROVIDERS.get(self._api_provider)
+        if spec and spec.docs:QDesktopServices.openUrl(QUrl(spec.docs))
+
+    def _test_api(self):
+        if self.api_probe.process is not None:return
+        self.test_api_button.setEnabled(False)
+        self.api_test_status.setText('正在测试固定 JSON 请求…')
+        self.api_probe.start(self.result_values())
+
+    def _api_test_finished(self,success,message):
+        self.test_api_button.setEnabled(self._api_provider in PROVIDERS)
+        self.api_test_status.setText(message)
 
     def _voice_service_changed(self,_status,message):
         self.voice_service_status.setText(message)
@@ -286,11 +422,13 @@ class SettingsDialog(QDialog):
             if isinstance(widget, QCheckBox):
                 result[key] = widget.isChecked()
             elif isinstance(widget, QComboBox):
-                result[key] = widget.currentData()
+                result[key] = widget.currentText().strip() if key=='model' else widget.currentData()
             elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
                 result[key] = widget.value()
             else:
                 result[key] = widget.text().strip()
         result["allow_image_api"] = False
         result["max_calls"] = DEFAULTS["max_calls"]
+        if self._api_provider in PROVIDERS:self._api_profiles[self._api_provider]=self._api_values()
+        result['text_api_profiles']=json.dumps(self._api_profiles,ensure_ascii=False)
         return result

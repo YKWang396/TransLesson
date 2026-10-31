@@ -235,7 +235,7 @@ def organize_sentences(project, settings, cancel=None, progress=None):
     """
     client = TextClient(settings, cancel, prompt_version="semantic-sentences-4")
     saved, save = _checkpoint(settings, "sentences", {
-        "project": project, "model": client.model, "base": settings.get("api_base"), "version": 4})
+        "project": project, "api": client.cache_identity, "version": 4})
     words = _word_evidence(project, settings)
     result = copy.deepcopy(project)
     result["segments"] = []
@@ -388,7 +388,7 @@ def generate_handout(project, settings, cancel=None, progress=None):
     client = TextClient({**settings, "max_output_tokens": settings.get("max_output_tokens", 12288)},
                         cancel, prompt_version="teaching-handout-3")
     saved, save = _checkpoint(settings, "handout", {
-        "project": project, "model": client.model, "base": settings.get("api_base"), "version": 3})
+        "project": project, "api": client.cache_identity, "version": 3})
     # Short, stable API aliases prevent long generated IDs from being mistyped
     # and keep citations from consuming most of the output token allowance.
     source_ids = {f"s{index+1}": segment["id"] for index, segment in enumerate(project["segments"])}

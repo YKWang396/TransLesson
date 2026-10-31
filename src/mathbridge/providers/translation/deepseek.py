@@ -114,7 +114,7 @@ def translate(project: dict, settings: dict, cancel=None, progress=None) -> dict
         "revision": project["revision"], "languages": project["languages"],
         "segments": project["segments"], "formulas": project["formulas"],
         "glossary": project["glossary"], "notes": project["notes"], "model": model,
-        "api_base": base, "provider": "local" if local else "remote",
+        "api_base": base, "api": client.cache_identity,
         "max_tokens": max_tokens, "batch_size": batch_size,
         "missing_only": bool(settings.get("_translation_missing_only")),
         "day": dt.datetime.now(dt.timezone.utc).date().isoformat(),
@@ -196,10 +196,7 @@ def translate(project: dict, settings: dict, cancel=None, progress=None) -> dict
         messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
         data = None
         for repair in range(2):
-            payload = {"model": model, "messages": messages, "response_format": {"type": "json_object"},
-                       "temperature": 0.1, "max_tokens": max_tokens, "stream": False}
-            if not local:
-                payload["thinking"] = {"type": "disabled"}
+            payload = client.payload(messages)
             content = request(payload)
             try:
                 data = _validate_rows(json.loads(content), batch, formula_map, glossary, project["languages"]["target"])
@@ -207,7 +204,7 @@ def translate(project: dict, settings: dict, cancel=None, progress=None) -> dict
             except (ValueError, TypeError, KeyError) as exc:
                 if repair:
                     raise TranslationError("INVALID_TRANSLATION", "一次结构修复后仍失败：" + str(exc), usage) from None
-                messages.extend([{"role": "assistant", "content": content[:100000]},
+                messages.extend([client.assistant_message(content),
                     {"role": "user", "content": "Repair the JSON once. Validation error: " + str(exc)}])
         lookup = {row["id"]: row for row in data["segments"]}
         from mathbridge.math.plain import display_math

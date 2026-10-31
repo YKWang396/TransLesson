@@ -2,7 +2,7 @@
 
 输入本地课程视频，得到目标语言视频、可编辑字幕和带来源的课程讲义 PDF。首版支持中英互译，Windows 优先，单机使用。
 
-**交付状态：0.2.0 Windows 原生桌面开发版本。** 本版增加配音静音检测、本地回听漏读筛查、自动重试和跨句语法复查。已有的项目恢复、AI 翻译与教学讲义、数学字幕、多人配音、本地组件与声音服务继续保留。自动检查不能替代课程内容、数学准确性和音色自然度的抽查。
+**交付状态：0.2.1 Windows 原生桌面开发版本。** 文本 API 支持千问、豆包、Kimi、GPT、DeepSeek 和自定义兼容接口，统一用于 AI 断句、翻译和教学讲义；新增连接与 JSON 测试及服务商独立配置。已有的本地识别、配音、项目恢复和导出继续保留。自动检查不能替代课程内容、数学准确性和音色自然度的抽查。
 
 ## 启动
 
@@ -14,7 +14,7 @@
 
 配音漏读修复与断句复查见 [0.2.0 更新说明](docs/19-speech-content-check.md)；软件图标、组件目录与内置服务操作见 [0.1.9 更新说明](docs/18-components-and-branding.md)；断句、静音利用和多段音色参考见 [0.1.8 更新说明](docs/17-sentence-timing-voice.md)；声音克隆参考自动填写及原生服务启动见 [0.1.7 更新说明](docs/16-auto-voice-reference.md)；自动配音与试听见 [0.1.5 更新说明](docs/14-adaptive-dubbing.md)；AI 文本工作流的入口、恢复方式与验证范围见 [本次更新说明](docs/13-ai-course-workflow.md)。
 
-详细操作见 [使用说明](docs/08-user-guide.md)、[换电脑与课程迁移](docs/12-another-computer.md) 与 [多人原声配音配置](docs/11-voice-backends.md)，当前功能和验证边界见 [实现状态](docs/09-implementation-status.md) 与 [本机验证记录](docs/10-validation-report.md)。原始设计文档继续作为产品目标保留。
+多服务商配置见 [0.2.1 文本 API 说明](docs/20-multiple-text-apis.md)。详细操作见 [使用说明](docs/08-user-guide.md)、[换电脑与课程迁移](docs/12-another-computer.md) 与 [多人原声配音配置](docs/11-voice-backends.md)，当前功能和验证边界见 [实现状态](docs/09-implementation-status.md) 与 [本机验证记录](docs/10-validation-report.md)。原始设计文档继续作为产品目标保留。
 
 ## 开发验证
 
@@ -44,13 +44,13 @@
 - 原文、译文、公式、读法和来源分别保存，便于校对与追踪。
 - 自动处理默认继续进行，存在低置信数学内容时在导出前进入校对。
 - 配音引擎、识别引擎与翻译引擎可替换，模型按需下载。
-- 支持本地桌面搭配 DeepSeek Flash API：语义任务可联网，媒体与工程管理仍在本地。
+- 支持多家文本 API：语义任务可联网，媒体与工程管理仍在本地。
 - 默认不上传视频或音频；联网模型下载和外部 API 处理分别明确提示。
 - 每次修改只重跑受影响的步骤，避免整段课程反复计算。
 
 ## Git
 
-仓库使用 `main`，源代码、依赖锁文件、测试和文档纳入 Git。当前应用快照为 `v0.2.0-speech-content`；此前 `v0.1.9-components-branding`、 `v0.1.8-course-voice`、 `v0.1.7-auto-reference`、 `v0.1.6-translesson`、 `v0.1.5-adaptive-dubbing`、 `v0.1.4-portable-api`、 `v0.1.3-ai-course`、`v0.1.2-long-course`、`v0.1.1-guided-review` 与 `v0.1.0-multispeaker` 继续保留为回退点。
+仓库使用 `main`，源代码、依赖锁文件、测试和文档纳入 Git。当前应用快照为 `v0.2.1-text-apis`；此前 `v0.2.0-speech-content`、`v0.1.9-components-branding`、 `v0.1.8-course-voice`、 `v0.1.7-auto-reference`、 `v0.1.6-translesson`、 `v0.1.5-adaptive-dubbing`、 `v0.1.4-portable-api`、 `v0.1.3-ai-course`、`v0.1.2-long-course`、`v0.1.1-guided-review` 与 `v0.1.0-multispeaker` 继续保留为回退点。
 
 Git 可以恢复到已提交的快照，未提交改动不会自动保留；当前快照之前的应用开发中间状态没有分别提交。后续修改应按完成并验证的功能提交，较大改动前先保存回退点。
 

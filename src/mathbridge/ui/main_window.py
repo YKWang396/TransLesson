@@ -60,8 +60,8 @@ class MainWindow(QMainWindow):
         self._credential_error = ""
         if self.coordinator.settings.get("remember_api_key"):
             try:
-                from mathbridge.storage.credentials import load_secret
-                self.coordinator.settings["api_key"] = load_secret("text-api")
+                from mathbridge.storage.credentials import load_text_secret
+                self.coordinator.settings["api_key"] = load_text_secret(self.coordinator.settings)
             except OSError:
                 self._credential_error = "无法读取 Windows 凭据库，请在处理设置中重新输入 API Key。"
         self._project = None
@@ -997,12 +997,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             values = dialog.result_values()
             try:
-                from mathbridge.storage.credentials import delete_secret, save_secret
-                if values.get("remember_api_key"):
-                    if values.get("api_key"):
-                        save_secret("text-api", values["api_key"])
-                elif self.coordinator.settings.get("remember_api_key"):
-                    delete_secret("text-api")
+                dialog.persist_credentials()
             except OSError:
                 values["remember_api_key"] = False
                 self._show_error("无法访问 Windows 凭据库，API Key 仍仅保留在当前会话。")
@@ -1174,7 +1169,8 @@ class MainWindow(QMainWindow):
         cfg = self.coordinator.settings
         model = cfg.get("whisper_model_path", "")
         model_state = "本地模型已选择" if model and Path(model).is_dir() else "未选择本地 Whisper 模型"
-        provider = {"manual": "手动校对", "deepseek": "DeepSeek API", "offline": "本地 llama.cpp"}.get(cfg.get("text_provider"), "手动校对")
+        from mathbridge.providers.translation.providers import provider_label
+        provider = provider_label(cfg.get("text_provider"))
         permission = "课程文本已授权上传" if cfg.get("allow_text_api") else "尚未授权课程文本上传"
         diarization = "自动流程已启用" if cfg.get("diarization_enabled") else "手动分配 / 按需区分"
         self.capabilities.setText(f"识别：{model_state}\n文本：{provider}")
