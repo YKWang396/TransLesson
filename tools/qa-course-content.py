@@ -13,7 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from mathbridge.storage.project_store import ProjectStore,atomic_json
 from mathbridge.ui.settings import load_settings
-from mathbridge.storage.credentials import load_secret
+from mathbridge.storage.credentials import load_text_secret
 from mathbridge.worker.__main__ import execute
 from mathbridge.domain.project import fingerprint,validate_project
 
@@ -46,7 +46,7 @@ def main():
     settings.update(_project_dir=str(root),_request_id='qa020-'+args.phase+'-'+uuid.uuid4().hex[:10],budget_cny=min(5.,settings['budget_cny']))
     def progress(stage,i,n,message):print(stage,i,n,message,flush=True)
     if args.phase in ['boundaries','translate']:
-        settings['api_key']=load_secret('text-api')
+        settings['api_key']=load_text_secret(settings)
         if not settings['api_key']:raise SystemExit('Saved credential unavailable')
     if args.phase=='boundaries':
         from mathbridge.providers.translation.client import TextClient

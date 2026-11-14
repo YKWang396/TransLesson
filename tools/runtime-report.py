@@ -70,7 +70,9 @@ def main():
             while chunk := f.read(1024 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()
-    report = {'application_name': '课译TransLesson', 'application_version': application_version, 'platform': platform.platform(), 'python': sys.version, 'packages': records,
+    report = {'application_name': '课译TransLesson', 'application_version': application_version,
+              'documentation_files': sorted(p.relative_to(ROOT).as_posix() for p in (ROOT/'docs').glob('*.md')),
+              'platform': platform.platform(), 'python': sys.version, 'packages': records,
               'node': {'version': node_version, 'sha256': sha(node) if node else None, 'license_status': 'Upstream Node.js and bundled third-party license collection required before public redistribution'},
               'mathjax': {'version': mathjax_data['version'], 'license': mathjax_data['license']},
               'ffmpeg': {'version_and_configuration': ffmpeg_version, 'sha256': sha(ffmpeg), 'license': 'GPL version 3 or later per actual -L output; compatible corresponding source distribution must be arranged before public redistribution'},
@@ -91,7 +93,7 @@ def main():
         '# 课译TransLesson '+application_version+'\n\n双击课译TransLesson.exe 启动，请保留整个文件夹。\n\n'
         '本地组件放在 components/GPT-SoVITS 和 components/faster-whisper-small，应用会自动识别；也可在处理设置中指定组件目录。'
         '在 03 配音点击“启动声音服务”，等待显示已就绪后使用原声音色。\n\n'
-        '[使用说明](docs/08-user-guide.md) · [文本 API](docs/20-multiple-text-apis.md) · [漏读检查](docs/19-speech-content-check.md) · [组件与服务](docs/18-components-and-branding.md) · [项目迁移](docs/12-another-computer.md)\n\n'
+        '[操作指南](docs/08-user-guide.md) · [文本 API](docs/20-multiple-text-apis.md) · [声音配置](docs/11-voice-backends.md) · [安装与迁移](docs/12-another-computer.md)\n\n'
         '项目与课程视频单独保存；文本 API 使用所配置的 Key。常规程序下载包不包含大型模型和 GPT-SoVITS 运行环境，迁移完整本机软件时请一并复制 components。\n',encoding='utf-8')
     print(f'Recorded {len(records)} installed runtime packages and available license files')
 

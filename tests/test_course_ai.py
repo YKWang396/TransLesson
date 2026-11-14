@@ -126,6 +126,26 @@ def test_boundary_review_owns_every_seam_and_cannot_join_speakers(course):
     assert len(output)==len(units)
 
 
+def test_boundary_review_defers_context_only_proposals_to_their_owner(course):
+    units=[dict(course['segments'][0],id=f'seg-{i}',source_text=f'Sentence {i}.',start_ms=i*1000,end_ms=(i+1)*1000)
+           for i in range(30)]
+    units[25]['source_text']='Can we express that differently?'
+    units[26]['source_text']='in linear combination words.'
+    repair=dict(left=25,fragment=units[26]['source_text'],reason='This prepositional phrase continues the preceding question.')
+    saved={}
+    class Client:
+        usage={}
+        def json(self,prompt,context,validate):
+            # Both windows can see this boundary, but only one owns it.
+            assert 25 in {u['index'] for u in context['units']}
+            return validate({'repairs':[repair]})
+    output,mapping=review_sentence_boundaries(units,Client(),saved,lambda key,value:saved.update({key:value}))
+    assert saved['review-0']=={'repairs':[]}
+    assert saved['review-24']=={'repairs':[repair]}
+    assert len(output)==29 and mapping['seg-25']==mapping['seg-26']
+    assert ' '.join(s['source_text'] for s in output)==' '.join(s['source_text'] for s in units)
+
+
 @pytest.mark.parametrize("text,bad_end", [("The course web page, which has exercises, is available.",4),
                                          ("This is linear algebra.",2),
                                          ("Shall we check that point, which is x=1 and y=2?",4),

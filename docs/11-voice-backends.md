@@ -1,90 +1,40 @@
-# 多人原声配音与本地声音服务
+# 声音与多人配音
 
-更新日期：2026-10-31。
+## 系统声音
 
-配音默认自动匹配节奏，通常无需预设整体速度；剩余问题可集中试听。操作与边界见 [自动节奏配音](14-adaptive-dubbing.md)。
+在“03 配音”选择说话人并配置 Windows 声音。目标语言声音需要在 Windows 中安装；每位说话人可使用不同声音。
 
-## 参考原声配音：GPT-SoVITS
+## 参考原声
 
-参考原声配音使用每位说话人的原视频片段作为声音参考，再生成目标语言的讲话。英语参考音频可以用于生成中文配音，中文参考音频也可以用于生成英语配音。音色相似度取决于参考录音、模型及译文的读法，需要试听后确认。Windows 系统声音仍可用于不需要模仿音色的项目。
+将完整 GPT-SoVITS 环境放入软件的 `components/GPT-SoVITS`，或在处理设置中指定其他位置。它需要自己的 Python、推理脚本与配套模型。
 
-课译 TransLesson 提供 GPT-SoVITS `api_v2.py` 的本机客户端。**GPT-SoVITS 服务与模型不包含在 课译 TransLesson 便携包中，需要另外准备并启动。** 当前本机已用 v2ProPlus 与自动选取的英语原声成功生成中文样例；音色相似度及整课听感仍需试听。自动参考和原生启动命令见 [自动参考声音说明](16-auto-voice-reference.md)。
+点击“启动声音服务”，等待已就绪。软件使用整合包中的 `api_v2.py`，通过本机 `http://127.0.0.1:9880` 调用，不上传参考音频。
 
-### 1. 准备服务
-
-从 [GPT-SoVITS 官方项目](https://github.com/RVC-Boss/GPT-SoVITS) 获取 Windows 整合包，或按[官方中文安装说明](https://github.com/RVC-Boss/GPT-SoVITS/blob/main/docs/cn/README.md)安装独立环境。请将该环境放在单独文件夹；课译 TransLesson 自带的 Python 环境用于桌面程序，不承担 GPT-SoVITS 的 PyTorch 环境。
-
-下载并准备与所选版本匹配的 GPT、SoVITS、中文文本前端及语音特征模型；官方说明中的预训练模型目录是 `GPT_SoVITS/pretrained_models`。模型版本和文件名会变化，应以当前使用的服务版本配置为准。首先在 GPT-SoVITS 自带界面确认中英文推理正常，再连接 课译 TransLesson。
-
-编辑 GPT-SoVITS 的 `GPT_SoVITS/configs/tts_infer.yaml`，核对 `custom` 下的模型文件路径及版本。CPU 环境使用 `device: cpu`、`is_half: false`；使用 NVIDIA 显卡时，应按该服务自己的安装说明准备匹配的 PyTorch/CUDA 环境并配置设备。不要直接沿用示例配置中的 CUDA 设置。
-
-在 **GPT-SoVITS 根目录**打开 PowerShell。使用它的独立 Python 环境运行：
-
-```powershell
-python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
-```
-
-如果使用包含 `runtime/python.exe` 的 Windows 整合包，可在整合包根目录运行：
+也可在整合包目录直接运行：
 
 ```powershell
 .\runtime\python.exe -I api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-服务启动后保持运行。只打开 WebUI 不等于启动了 `api_v2.py` 服务。默认连接地址为 `http://127.0.0.1:9880`，地址末尾带 `/tts` 也可。课译 TransLesson 只允许本机回环 HTTP 地址，不跟随重定向，也不使用系统代理。
+存在 `tts_translesson.yaml` 时，软件内置启动器优先使用它。组件目录还提供启动和停止服务脚本。
 
-### 2. 为每人选取参考原声
+为说话人选择“参考原声”，确认有声音使用授权。软件按原文和时间自动填写参考片段，可试听、更换并补充同一人的其他原声。主参考保持 3–10 秒清晰连续讲话，文字必须与实际音频对应；自动补充最多三段互不重叠的同人原声。
 
-在“03 配音 → 配置选中说话人”会自动带入参考原声时间、对应原话和语言；也可点击“自动选取并填写”重新选择。每位说话人使用自己的 **3–10 秒 PCM WAV**，建议选择 4–8 秒连续说话、音量正常且没有其他人抢话的片段。参考原文须准确对应这段音频，参考语言选择音频实际语言。背景音乐、混响、嘈杂和多人重叠会降低音色匹配效果。
+这些片段用于推理时的声音参考。增加参考片段不能替代模型训练，也不能保证发音、力度和情绪完全还原。避免使用静音、背景音乐明显、夹杂其他人的片段。
 
-例如，老师使用一段英语讲解作为参考，学生使用一段自己的英语提问作为参考；给老师和学生的中文译文分别调用配音时，传入各自的参考音频和原文。不要将两人的声音混在同一个参考片段中。
+配音默认自动匹配节奏。源句与译句不需要逐字等长；程序测量实际音频，再安排停顿和局部速度。不要为适应短时间窗大幅提高全局语速。
 
-当前客户端要求服务与 课译 TransLesson 运行在同一台电脑，因为服务读取传入的绝对参考文件路径。Docker、WSL 或另一台机器无法直接读取 Windows 工程路径时，需要先解决路径挂载；当前客户端不代做跨环境路径转换。
+## 多说话人
 
-### 3. 连接检查与异常处理
+本地自动分人需要额外的说话人分段与声纹 ONNX 模型。在“组件与识别 → 高级识别设置”选择模型及人数（0 为自动），识别原文后执行分人。
 
-连接检查读取本地 FastAPI 的 `/openapi.json`，确认存在 `POST /tts`；这只能证明接口可访问，不能代替实际试听。客户端向 `/tts` 发送目标读法、目标语言、参考 WAV 路径、参考原文与参考语言，并要求非流式 WAV 响应，协议见[官方 API 源码](https://github.com/RVC-Boss/GPT-SoVITS/blob/main/api_v2.py)。
+源码环境可用 `tools/setup-speakers.py` 显式下载所需模型。软件处理课程时不会自动下载。也可在高级校对中手动分配说话人并修改名称。
 
-返回音频经过格式、长度和完整性检查后才原子保存；JSON 错误、无效音频和超时不会替换已有的成功结果。取消操作会立即停止客户端等待并阻止迟到结果写入工程；独立的 GPT-SoVITS 服务可能仍在计算该请求，需要在服务控制台观察。课译 TransLesson 不会自动重试生成，也不会自动切换成另一种声音。
+不同人分别配置参考。已经编辑、带公式或被讲义引用的句子会保守保留；重叠讲话不做干净的人声分离，需要试听修正归属。
 
-服务端切换模型后，应同步更改 课译 TransLesson 的声音模型标识，避免把旧模型生成的音频当成新结果复用。模型标识是缓存区分信息，不会让客户端远程切换服务端权重。
+## 常见问题
 
-## 验证范围
-
-客户端测试覆盖了真实本机 HTTP 请求、跨语言参数、有效 PCM WAV、服务错误、禁止远程地址和重定向、等待响应时取消、超时，以及无效输出保留旧文件。现已用本机真实 v2ProPlus 服务完成英语参考到中文样例的推理测试；单个样例不能代替音色相似度、整课自然度或吞吐量评测。
-
-## 本地多人说话人区分：sherpa-onnx
-
-说话人区分判断原视频的每个时间段属于哪一位说话人，再将结果与 Whisper 的逐词时间对齐。声线编号按首次出现顺序分配，可在应用中改为老师、学生等名字；系统不会根据声音猜测真实身份。
-
-本功能使用 CPU ONNX 推理，不需要 CUDA，也不需要 Hugging Face Token。需要两个独立模型：Pyannote 分段模型与 NeMo Titanet small 声线特征模型。下载来源、用法及模型许可请参看 [sherpa-onnx 官方模型说明](https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/models.html)。它们与 Whisper 模型用途不同，不能将 Whisper 模型目录填到说话人设置中。
-
-在 课译 TransLesson 源码根目录打开 PowerShell，运行：
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install ".[diarization]"
-.\.venv\Scripts\python.exe .\tools\setup-speakers.py
-```
-
-第一条安装本地识别组件；若当前便携包已包含该组件，则无需再安装。第二条是**用户显式运行的模型下载工具**，会从 k2-fsa/sherpa-onnx 官方 GitHub Releases 下载模型，不上传视频或语音。应用处理课程时不会自动下载模型。工具只读取压缩包内指定的普通模型文件，不展开任意压缩包路径；官方 Release API 提供 SHA-256 时会核对下载摘要，并在模型目录的 `manifest.json` 中记录下载来源与文件摘要。
-
-默认模型文件位于源码根目录下的 `models/speakers/segmentation.onnx` 与 `models/speakers/embedding.onnx`。在说话人设置中分别选择这两个文件。人数填 0 时自动估计；已知实际人数时可直接填写，以减少聚类错误。
-
-如果当前网络无法访问 GitHub Releases，可显式选择维护者 Hugging Face 副本，工具会核对固定的原模型 SHA-256：
-
-```powershell
-.\.venv\Scripts\python.exe .\tools\setup-speakers.py --source huggingface
-```
-
-副本由 sherpa-onnx 维护者提供：[分段模型](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0)、[声线特征模型](https://huggingface.co/csukuangfj/speaker-embedding-models)。此选项只替换两个模型的下载源，测试音频仍取自官方 GitHub Release。
-
-先进行本地转写，再分析说话人，最后翻译与配音。原文与逐词时间仍匹配的未翻译段可以在换人处自动拆分。已经翻译、含公式或术语、被讲义引用的段会保留文字与引用，并提示手动检查归属。字幕来源没有逐词时间时，系统也会保守保留整段，避免凭空拆分文字。
-
-多人同时讲话会被标记为待校对；当前分析只识别重叠情形，不将同时讲话的人声分离成干净的独立音轨。短促插话、相似声线、远处收音和背景音乐仍可能造成误分，需要试听并修正。
-
-开发验证可显式下载官方四人样例：
-
-```powershell
-.\.venv\Scripts\python.exe .\tools\setup-speakers.py --with-test-audio
-```
-
-样例保存在 `tmp/speaker-diarization/0-four-speakers-zh.wav`，不进入课程工程，也不作为真实数学课准确率证明。
+- 服务未就绪：检查组件路径、端口占用和组件 `output` 中的服务日志。
+- 静音／漏读：查看具体问题句，重试自动配音；检查参考录音和对应文字。
+- 配音过长：检查读法是否冗长，再调整同一人的语义分段；保留原意。
+- 音色或咬字不理想：更换清晰参考、检查目标语言读法与模型配置，比较自然译声和匹配后的版本。

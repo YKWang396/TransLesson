@@ -161,18 +161,34 @@ def review_sentence_boundaries(segments, client, saved, save, cancel=None, progr
         def validate(data):
             if not isinstance(data, dict) or set(data) != {"repairs"} or not isinstance(data["repairs"], list):
                 raise ValueError('return {repairs:[{left,fragment,reason}]}, or {repairs:[]}')
-            seen = set()
+            seen, owned = set(), []
+            visible = {unit["index"] for unit in context["units"]}
             for item in data["repairs"]:
                 if (not isinstance(item, dict) or set(item) != {"left", "fragment", "reason"}
-                        or type(item["left"]) is not int or item["left"] not in allowed or item["left"] in seen
+                        or type(item["left"]) is not int or item["left"] in seen
                         or not isinstance(item["fragment"], str) or len(item["fragment"].strip()) < 3
                         or not isinstance(item["reason"], str) or len(item["reason"].strip()) < 12):
                     raise ValueError("each repair needs a valid left boundary, exact dangling fragment and grammatical reason")
                 i = item["left"]
+                if i not in visible or i+1 not in visible:
+                    raise ValueError("repair index is outside visible source units; use only boundaries="+str(sorted(allowed)))
                 if not any(item["fragment"] in segments[k]["source_text"] for k in (i, i+1)):
                     raise ValueError("fragment must quote one of the two adjacent source units exactly")
+                if (segments[i]["speaker_id"] != segments[i+1]["speaker_id"]
+                        or segments[i+1]["start_ms"]-segments[i]["end_ms"] > 10000
+                        or segments[i+1]["end_ms"]-segments[i]["start_ms"] > 30000):
+                    raise ValueError("boundary cannot be joined (speaker, gap or duration); use boundaries="+str(sorted(allowed)))
                 seen.add(i)
-            return data["repairs"]
+                if not first <= i < stop:
+                    # Neighbouring units are context, not owned by this window.
+                    # Providers sometimes suggest a valid repair there anyway;
+                    # its owning window will review it. Never fail the whole
+                    # course or apply a context-only join twice.
+                    continue
+                if i not in allowed:
+                    raise ValueError("boundary cannot be joined (speaker, gap or duration); use boundaries="+str(sorted(allowed)))
+                owned.append(item)
+            return owned
         name = f"review-{first}"
         try:
             chosen = validate(saved[name]) if name in saved else None
@@ -193,6 +209,7 @@ def review_sentence_boundaries(segments, client, saved, save, cancel=None, progr
                 "'If x is minus 1, that is 1.' / 'If y is 1, that is 2.'; "
                 "'Now I should draw the line, right?' / 'Connecting those two points gives the whole line.' "
                 "ASR periods and question marks can be false. Use only indices in boundaries. "
+                "Other visible indices are context owned by neighbouring review windows; do not return repairs for them. "
                 "Keep an if-clause with its consequence, a relative clause "
                 "with its main clause, a mathematical expression with its continuation, and an attached "
                 "phrase with its governing sentence. Example: 'Can I put that in different words?' / "

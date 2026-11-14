@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from mathbridge.storage.project_store import ProjectStore, atomic_json
-from mathbridge.storage.credentials import load_secret
+from mathbridge.storage.credentials import load_text_secret
 from mathbridge.ui.settings import load_settings
 from mathbridge.worker.__main__ import execute
 
@@ -31,7 +31,7 @@ def main():
     settings = load_settings()
     if not settings.get("remember_api_key") or not settings.get("allow_text_api"):
         raise SystemExit("Real API QA requires a saved Windows credential and course-text permission.")
-    settings["api_key"] = load_secret("text-api")
+    settings["api_key"] = load_text_secret(settings)
     if not settings["api_key"]:
         raise SystemExit("No saved API key available.")
     baseline = json.loads((source/"runtime.json").read_text(encoding="utf-8")).get("usage", {})

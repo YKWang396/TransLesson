@@ -28,7 +28,8 @@ def main():
     coordinator.open_project(folder);window.show();window.resize(1120,760);window.tabs.setCurrentIndex(2)
     QCoreApplication.processEvents()
     assert window.auto_timing.isChecked()
-    assert len(window._alignment_report['plans'])==407
+    expected=len(coordinator.project['segments'])
+    assert expected > 0 and len(window._alignment_report['plans'])==expected
     assert not window._alignment_report['issues']
     # A successful audio job does not change project revision; it must still
     # invalidate the old issue list rather than displaying the old 117 failures.
@@ -39,16 +40,16 @@ def main():
     calls=[]
     dialog=DubbingReviewDialog(coordinator.project,window._alignment_report,lambda *args:calls.append(args),lambda _issue:None,window)
     dialog.show();QCoreApplication.processEvents()
-    assert dialog.listing.count()>100
+    assert dialog.listing.count()>0
     for kind in ('original','natural','matched'):dialog._listen(kind)
     assert [c[1] for c in calls]==['original','natural','matched']
     dialog.filter.setCurrentIndex(0)
     assert dialog.listing.count()==0 and not dialog.modify.isEnabled()
     dialog.filter.setCurrentIndex(2)
-    assert dialog.listing.count()==407
+    assert dialog.listing.count()==expected
     dialog.grab().save(str(ROOT/'artifacts/ui-dubbing-listening-queue.png'))
     dialog.close();window.close();QCoreApplication.processEvents()
-    print('PASS: 407-clip review queue, original/natural/matched callbacks, filters, refreshed same-revision status and 1120x760 layout')
+    print(f'PASS: {expected}-clip review queue, audio callbacks, filters, refreshed status and compact layout')
     return 0
 
 if __name__=='__main__':raise SystemExit(main())

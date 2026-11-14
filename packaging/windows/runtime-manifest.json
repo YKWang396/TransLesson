@@ -1,6 +1,18 @@
 {
   "application_name": "课译TransLesson",
-  "application_version": "0.2.1",
+  "application_version": "0.2.2",
+  "documentation_files": [
+    "docs/01-requirements.md",
+    "docs/02-design.md",
+    "docs/03-contracts.md",
+    "docs/05-acceptance.md",
+    "docs/08-user-guide.md",
+    "docs/11-voice-backends.md",
+    "docs/12-another-computer.md",
+    "docs/20-multiple-text-apis.md",
+    "docs/development.md",
+    "docs/testing.md"
+  ],
   "platform": "Windows-11-10.0.26200-SP0",
   "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
   "packages": [

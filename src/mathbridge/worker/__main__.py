@@ -564,11 +564,18 @@ def main():
     try:
         # Windows native numerical runtimes can consult CRT file descriptors
         # while loading. Load them before a background thread blocks on stdin.
-        if command.get("stage") in {"transcribe", "diarize"}:
+        stage = command.get("stage")
+        speech_check = (stage in {"dub", "preview"} or stage == "export" and
+                        bool(set(command.get("options", {}).get("formats", [])) & {"video", "wav"}))
+        reference_voice = any(s.get("voice_mode") == "reference"
+                              for s in (command.get("project") or {}).get("speakers", []))
+        model_path = command.get("settings", {}).get("whisper_model_path")
+        speech_check = bool(speech_check and reference_voice and model_path and (Path(model_path)/"model.bin").is_file())
+        if stage in {"transcribe", "diarize"} or speech_check:
             report(dict(type="progress", stage=command["stage"], completed=0, total=0,
-                        message="正在加载本地语音识别组件"))
+                        message="正在加载本地配音检查组件" if speech_check else "正在加载本地语音识别组件"))
             import numpy
-            if command["stage"] == "transcribe":
+            if stage != "diarize":
                 import faster_whisper
             else:
                 import sherpa_onnx

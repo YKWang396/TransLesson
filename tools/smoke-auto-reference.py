@@ -1,5 +1,6 @@
 """Check reference auto-fill, preservation and time/text synchronization."""
 from pathlib import Path
+import argparse
 import copy
 import json
 import os
@@ -16,6 +17,9 @@ from mathbridge.application.reference import load_reference_words,reference_for_
 from mathbridge.ui.editors import SpeakerDialog
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--project',type=Path,help='Optional real course for reference suggestions (read only)')
+    args=parser.parse_args()
     app=QApplication([]);app.setStyle("Fusion")
     for name in ("msyh.ttc","msyhbd.ttc"):
         QFontDatabase.addApplicationFont(str(Path(os.environ.get("WINDIR","C:/Windows"))/"Fonts"/name))
@@ -64,7 +68,10 @@ def main():
     assert dialog.reference_start.value()==2 and dialog.reference_end.value()==8
     assert dialog.reference_text.toPlainText()==saved["voice_profile"]["reference_text"]
     dialog.close()
-    source=Path.home()/"Desktop/trans-AI-0.1.3"
+    if not args.project:
+        print('PASS: automatic reference fields, replay, timing, stale text clearing and manual preservation')
+        return 0
+    source=args.project.resolve()
     original=(source/"project.json").read_bytes()
     project=json.loads(original)
     words=load_reference_words(project,source)

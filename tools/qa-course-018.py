@@ -15,7 +15,7 @@ import threading
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from mathbridge.storage.project_store import ProjectStore,atomic_json
-from mathbridge.storage.credentials import load_secret
+from mathbridge.storage.credentials import load_text_secret
 from mathbridge.ui.settings import load_settings
 from mathbridge.worker.__main__ import execute
 from mathbridge.application.reference import load_reference_words,suggest_auxiliary_references
@@ -57,7 +57,7 @@ def main():
     settings=load_settings()
     settings.update(_project_dir=str(destination),_request_id='qa018-'+args.phase)
     if args.phase in ('sentences','translate'):
-        settings['api_key']=load_secret('text-api')
+        settings['api_key']=load_text_secret(settings)
         if not settings['api_key']:raise SystemExit('Saved credential unavailable')
     if args.phase=='voices':
         for speaker in project['speakers']:
